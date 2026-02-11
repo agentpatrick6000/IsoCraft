@@ -1,0 +1,19 @@
+{
+  "name": "IsoCraft",
+  "short_name": "IsoCraft",
+  "description": "Prototype isometric voxel survival builder.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#101418",
+  "orientation": "landscape",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
