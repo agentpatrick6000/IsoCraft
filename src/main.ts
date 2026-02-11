@@ -173,6 +173,7 @@ type WorldChunk = {
 };
 
 const terrainMeshes: THREE.Mesh[] = [];
+const leavesMeshes: THREE.Mesh[] = [];
 const worldChunks: WorldChunk[] = [];
 const worldChunkByKey = new Map<string, WorldChunk>();
 
@@ -562,6 +563,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       leavesMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
       leavesMesh.renderOrder = 1;
       worldRoot.add(leavesMesh);
+      leavesMeshes.push(leavesMesh);
 
       const record: WorldChunk = { chunkX, chunkZ, chunk, terrainMesh: chunkMesh, leavesMesh };
       worldChunks.push(record);
@@ -656,6 +658,17 @@ scene.add(sun.target);
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 
+type PlacementTarget = {
+  chunkX: number;
+  chunkZ: number;
+  localX: number;
+  localY: number;
+  localZ: number;
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+};
+
 type MiningTarget = {
   chunkX: number;
   chunkZ: number;
@@ -701,6 +714,43 @@ miningFill.style.height = '100%';
 miningFill.style.background = 'linear-gradient(90deg, #fde047, #f59e0b)';
 miningOverlay.appendChild(miningFill);
 app.appendChild(miningOverlay);
+
+const selectedPlaceBlock = BlockId.Dirt;
+const placeableInventory: Partial<Record<BlockId, number>> = {
+  [BlockId.Dirt]: 48
+};
+
+const placementHud = document.createElement('div');
+placementHud.style.position = 'fixed';
+placementHud.style.right = '10px';
+placementHud.style.bottom = '14px';
+placementHud.style.padding = '6px 10px';
+placementHud.style.borderRadius = '8px';
+placementHud.style.background = 'rgba(0,0,0,0.55)';
+placementHud.style.border = '1px solid rgba(255,255,255,0.35)';
+placementHud.style.color = '#fff';
+placementHud.style.fontFamily = 'system-ui, sans-serif';
+placementHud.style.fontSize = '12px';
+placementHud.style.zIndex = '25';
+placementHud.style.pointerEvents = 'none';
+app.appendChild(placementHud);
+
+const placementPreview = new THREE.Mesh(
+  new THREE.BoxGeometry(1, 1, 1),
+  new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.35, depthWrite: false })
+);
+placementPreview.visible = false;
+placementPreview.renderOrder = 3;
+scene.add(placementPreview);
+
+let activePlacementTarget: PlacementTarget | null = null;
+
+function refreshPlacementHud(): void {
+  const count = placeableInventory[selectedPlaceBlock] ?? 0;
+  placementHud.textContent = `Place Dirt: ${count} (RMB / long-press)`;
+}
+
+refreshPlacementHud();
 
 let activeMiningTarget: MiningTarget | null = null;
 let miningStartMs = 0;
@@ -878,6 +928,187 @@ function beginBreakAnimation(target: MiningTarget): void {
   scene.add(miningGhost);
 }
 
+function getBlockAtWorld(worldX: number, worldY: number, worldZ: number): { record: WorldChunk; localX: number; localZ: number; chunkX: number; chunkZ: number } | null {
+  if (worldY < 0 || worldY >= CHUNK_HEIGHT) {
+    return null;
+  }
+
+  const xSplit = splitChunkAndLocal(worldX);
+  const zSplit = splitChunkAndLocal(worldZ);
+  const record = worldChunkByKey.get(worldChunkKey(xSplit.chunk, zSplit.chunk));
+  if (!record) {
+    return null;
+  }
+
+  return { record, localX: xSplit.local, localZ: zSplit.local, chunkX: xSplit.chunk, chunkZ: zSplit.chunk };
+}
+
+function getPlacementTargetFromPointer(clientX: number, clientY: number): PlacementTarget | null {
+  if (terrainMeshes.length === 0) {
+    return null;
+  }
+
+  screenToNdc(clientX, clientY);
+  raycaster.setFromCamera(pointerNdc, camera);
+
+  const hits = raycaster.intersectObjects([...terrainMeshes, ...leavesMeshes], false);
+  if (hits.length === 0) {
+    return null;
+  }
+
+  const hit = hits[0];
+  const normal = hit.face?.normal.clone() ?? new THREE.Vector3(0, 1, 0);
+  const terrainPoint = new THREE.Vector3(sceneToTerrainX(hit.point.x), hit.point.y, sceneToTerrainZ(hit.point.z));
+  const placePoint = terrainPoint.addScaledVector(normal, 0.01);
+
+  const worldX = Math.floor(placePoint.x);
+  const worldY = Math.floor(placePoint.y);
+  const worldZ = Math.floor(placePoint.z);
+
+  const blockEntry = getBlockAtWorld(worldX, worldY, worldZ);
+  if (!blockEntry) {
+    return null;
+  }
+
+  if (blockEntry.record.chunk.get(blockEntry.localX, worldY, blockEntry.localZ) !== BlockId.Air) {
+    return null;
+  }
+
+  const supportPoint = terrainPoint.addScaledVector(normal, -0.01);
+  const supportX = Math.floor(supportPoint.x);
+  const supportY = Math.floor(supportPoint.y);
+  const supportZ = Math.floor(supportPoint.z);
+  const supportEntry = getBlockAtWorld(supportX, supportY, supportZ);
+  if (!supportEntry) {
+    return null;
+  }
+
+  const supportBlock = supportEntry.record.chunk.get(supportEntry.localX, supportY, supportEntry.localZ);
+  if (supportBlock === BlockId.Air || supportBlock === BlockId.Water) {
+    return null;
+  }
+
+  return {
+    chunkX: supportEntry.chunkX,
+    chunkZ: supportEntry.chunkZ,
+    localX: blockEntry.localX,
+    localY: worldY,
+    localZ: blockEntry.localZ,
+    worldX,
+    worldY,
+    worldZ
+  };
+}
+
+function isPlacementInsidePlayer(target: PlacementTarget): boolean {
+  const px = playerTerrainPos.x;
+  const py = playerTerrainPos.y;
+  const pz = playerTerrainPos.z;
+  const playerMinX = px - 0.35;
+  const playerMaxX = px + 0.35;
+  const playerMinZ = pz - 0.35;
+  const playerMaxZ = pz + 0.35;
+  const playerMinY = py - 1;
+  const playerMaxY = py + 1;
+
+  const blockMinX = target.worldX;
+  const blockMaxX = target.worldX + 1;
+  const blockMinY = target.worldY;
+  const blockMaxY = target.worldY + 1;
+  const blockMinZ = target.worldZ;
+  const blockMaxZ = target.worldZ + 1;
+
+  return !(
+    blockMaxX <= playerMinX ||
+    blockMinX >= playerMaxX ||
+    blockMaxY <= playerMinY ||
+    blockMinY >= playerMaxY ||
+    blockMaxZ <= playerMinZ ||
+    blockMinZ >= playerMaxZ
+  );
+}
+
+function updatePlacementPreview(clientX: number, clientY: number): void {
+  const candidate = getPlacementTargetFromPointer(clientX, clientY);
+  const count = placeableInventory[selectedPlaceBlock] ?? 0;
+  if (!candidate || count <= 0 || isPlacementInsidePlayer(candidate)) {
+    activePlacementTarget = null;
+    placementPreview.visible = false;
+    return;
+  }
+
+  activePlacementTarget = candidate;
+  placementPreview.visible = true;
+  placementPreview.position.set(terrainToSceneX(candidate.worldX + 0.5), candidate.worldY + 0.5, terrainToSceneZ(candidate.worldZ + 0.5));
+}
+
+function placeBlockAtTarget(target: PlacementTarget): boolean {
+  if (isPlacementInsidePlayer(target)) {
+    return false;
+  }
+
+  const count = placeableInventory[selectedPlaceBlock] ?? 0;
+  if (count <= 0) {
+    return false;
+  }
+
+  const targetEntry = getBlockAtWorld(target.worldX, target.worldY, target.worldZ);
+  if (!targetEntry) {
+    return false;
+  }
+
+  if (targetEntry.record.chunk.get(targetEntry.localX, target.worldY, targetEntry.localZ) !== BlockId.Air) {
+    return false;
+  }
+
+  targetEntry.record.chunk.set(targetEntry.localX, target.worldY, targetEntry.localZ, selectedPlaceBlock);
+  placeableInventory[selectedPlaceBlock] = count - 1;
+  refreshPlacementHud();
+
+  const targetChunkX = Math.floor(target.worldX / CHUNK_SIZE);
+  const targetChunkZ = Math.floor(target.worldZ / CHUNK_SIZE);
+  const candidateChunks = [
+    [targetChunkX, targetChunkZ],
+    [targetChunkX - 1, targetChunkZ],
+    [targetChunkX + 1, targetChunkZ],
+    [targetChunkX, targetChunkZ - 1],
+    [targetChunkX, targetChunkZ + 1]
+  ];
+
+  const updated = new Set<string>();
+  for (const [cx, cz] of candidateChunks) {
+    const key = worldChunkKey(cx, cz);
+    if (updated.has(key)) continue;
+    const record = worldChunkByKey.get(key);
+    if (!record) continue;
+    rebuildChunkMeshes(record, blockTilesById);
+    updated.add(key);
+  }
+
+  updateTopYForColumn(targetChunkX, targetChunkZ, ((target.worldX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE, ((target.worldZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE);
+
+  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.value = 520;
+  gain.gain.value = 0.02;
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.035);
+
+  return true;
+}
+
+function handlePlace(clientX: number, clientY: number): void {
+  updatePlacementPreview(clientX, clientY);
+  if (activePlacementTarget) {
+    placeBlockAtTarget(activePlacementTarget);
+    updatePlacementPreview(clientX, clientY);
+  }
+}
+
 function handleTap(clientX: number, clientY: number): void {
   if (recenterIfPlayerTapped(clientX, clientY)) {
     return;
@@ -954,6 +1185,7 @@ renderer.domElement.addEventListener('mousedown', (event) => {
 });
 
 window.addEventListener('mousemove', (event) => {
+  updatePlacementPreview(event.clientX, event.clientY);
   if (!isMiddlePanning) return;
 
   const dx = event.clientX - mouseLastX;
@@ -972,6 +1204,11 @@ window.addEventListener('mouseup', (event) => {
   isMiddlePanning = false;
 });
 
+renderer.domElement.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+  handlePlace(event.clientX, event.clientY);
+});
+
 renderer.domElement.addEventListener('click', (event) => {
   if (didMousePan) {
     didMousePan = false;
@@ -987,6 +1224,7 @@ type ActiveTouchState = {
   lastAngle: number;
   dragMoved: boolean;
   rotateCooldown: boolean;
+  pressStartMs?: number;
 };
 
 const activeTouch: ActiveTouchState = {
@@ -1033,6 +1271,7 @@ renderer.domElement.addEventListener(
     activeTouch.lastAngle = touchAngle(event.touches);
     activeTouch.dragMoved = false;
     activeTouch.rotateCooldown = false;
+    activeTouch.pressStartMs = performance.now();
   },
   { passive: true }
 );
@@ -1042,6 +1281,7 @@ renderer.domElement.addEventListener(
   (event) => {
     if (event.touches.length === 1) {
       const center = touchCenter(event.touches);
+      updatePlacementPreview(center.x, center.y);
       const dx = center.x - activeTouch.lastCenterX;
       const dy = center.y - activeTouch.lastCenterY;
 
@@ -1057,6 +1297,7 @@ renderer.domElement.addEventListener(
 
     if (event.touches.length >= 2) {
       const center = touchCenter(event.touches);
+      updatePlacementPreview(center.x, center.y);
       const dx = center.x - activeTouch.lastCenterX;
       const dy = center.y - activeTouch.lastCenterY;
       if (Math.abs(dx) + Math.abs(dy) > 1) {
@@ -1091,7 +1332,12 @@ renderer.domElement.addEventListener(
   (event) => {
     if (!activeTouch.dragMoved && event.changedTouches.length > 0) {
       const touch = event.changedTouches[0];
-      handleTap(touch.clientX, touch.clientY);
+      const pressDuration = performance.now() - (activeTouch.pressStartMs ?? performance.now());
+      if (pressDuration > 380) {
+        handlePlace(touch.clientX, touch.clientY);
+      } else {
+        handleTap(touch.clientX, touch.clientY);
+      }
     }
 
     if (event.touches.length > 0) {
