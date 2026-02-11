@@ -501,6 +501,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   atlasTexture.minFilter = THREE.NearestFilter;
   worldAtlasTexture = atlasTexture;
   atlasTexture.generateMipmaps = false;
+  updateHeldItemVisual();
   atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
   atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
@@ -752,6 +753,7 @@ inventorySlots[0] = { block: BlockId.Dirt, count: 48 };
 
 let selectedHotbarIndex = 0;
 let selectedInventoryIndex: number | null = null;
+let heldItemMesh: THREE.Mesh | null = null;
 
 const hotbarRoot = document.createElement('div');
 hotbarRoot.style.position = 'fixed';
@@ -997,6 +999,49 @@ function getSelectedHotbarStack(): InventoryStack | null {
   return inventorySlots[selectedHotbarIndex];
 }
 
+function updateHeldItemVisual(): void {
+  const selectedStack = getSelectedHotbarStack();
+  const selectedBlock = selectedStack?.block ?? null;
+  const currentBlock = (heldItemMesh?.userData?.block as BlockId | undefined) ?? null;
+
+  if (selectedBlock === null) {
+    if (heldItemMesh) {
+      player.remove(heldItemMesh);
+      heldItemMesh = null;
+    }
+    return;
+  }
+
+  if (heldItemMesh && currentBlock === selectedBlock) {
+    return;
+  }
+
+  if (heldItemMesh) {
+    player.remove(heldItemMesh);
+    heldItemMesh = null;
+  }
+
+  if (!worldAtlasTexture) {
+    heldItemMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.32, 0.32, 0.32),
+      new THREE.MeshStandardMaterial({ color: 0xd1d5db, roughness: 0.7, metalness: 0.05 })
+    );
+  } else {
+    heldItemMesh = createVoxelBlockMesh({
+      atlasTexture: worldAtlasTexture,
+      tiles: blockTilesById[selectedBlock],
+      atlasColumns: 4,
+      atlasRows: 4,
+      size: 0.32
+    });
+  }
+
+  heldItemMesh.userData.block = selectedBlock;
+  heldItemMesh.position.set(0.52, 0.98, 0.18);
+  heldItemMesh.rotation.set(0.22, -0.42, 0);
+  player.add(heldItemMesh);
+}
+
 function addItemToInventory(block: BlockId, amount = 1): number {
   let remaining = amount;
 
@@ -1128,6 +1173,8 @@ function refreshPlacementHud(): void {
   } else {
     inventorySelectionInfo.textContent = 'Tap an item, then tap destination to move.';
   }
+
+  updateHeldItemVisual();
 
   if (!selectedStack) {
     placementHud.textContent = 'Selected: Empty slot — pick a hotbar item';
@@ -1939,7 +1986,11 @@ function animate(timeMs: number): void {
         updateTopYForColumn(target.chunkX, target.chunkZ, target.localX, target.localZ);
         rebuildChunkMeshes(record, blockTilesById);
         beginBreakAnimation(target);
-        spawnDroppedItem(target.block, target.worldX, target.worldY, target.worldZ);
+
+        const stored = addToInventory(target.block, 1);
+        if (stored < 1) {
+          spawnDroppedItem(target.block, target.worldX, target.worldY, target.worldZ);
+        }
       }
     }
   }
@@ -1974,9 +2025,11 @@ function animate(timeMs: number): void {
     const distSq = dx * dx + dz * dz + dy * dy;
 
     if (distSq <= PICKUP_RADIUS * PICKUP_RADIUS) {
-      addToInventory(item.userData.block, 1);
-      droppedItems.splice(i, 1);
-      releaseDroppedItem(item);
+      const stored = addToInventory(item.userData.block, 1);
+      if (stored > 0) {
+        droppedItems.splice(i, 1);
+        releaseDroppedItem(item);
+      }
       continue;
     }
 
