@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createVoxelBlockMesh, type FaceTileMap } from './voxel';
 
 const app = document.getElementById('app');
 if (!app) {
@@ -21,6 +22,40 @@ const ZOOM_LEVELS: number[] = [14, 20, 28];
 let zoomLevel = 1;
 let currentFrustumSize: number = ZOOM_LEVELS[zoomLevel];
 let desiredFrustumSize: number = currentFrustumSize;
+
+const textureLoader = new THREE.TextureLoader();
+
+const atlasPreviewRoot = new THREE.Group();
+scene.add(atlasPreviewRoot);
+
+const grassTiles: FaceTileMap = {
+  top: 0,
+  bottom: 2,
+  north: 1,
+  south: 1,
+  east: 1,
+  west: 1
+};
+
+textureLoader.load('/textures/atlas.png', (atlasTexture) => {
+  const grassBlock = createVoxelBlockMesh({ atlasTexture, tiles: grassTiles });
+  grassBlock.position.set(0, 0.5, 0);
+  atlasPreviewRoot.add(grassBlock);
+
+  const stoneBlock = createVoxelBlockMesh({
+    atlasTexture,
+    tiles: {
+      top: 3,
+      bottom: 3,
+      north: 3,
+      south: 3,
+      east: 3,
+      west: 3
+    }
+  });
+  stoneBlock.position.set(1, 0.5, 0);
+  atlasPreviewRoot.add(stoneBlock);
+});
 
 const player = new THREE.Mesh(
   new THREE.BoxGeometry(1, 0.2, 1),
