@@ -82,7 +82,86 @@ const BASE_HEIGHT = 5;
 const HEIGHT_AMPLITUDE = 3;
 const HEIGHT_NOISE_SCALE = 0.05;
 
-const playerSpawnPosition = new THREE.Vector3(0, 6, 0);
+const playerSpawnTerrainPosition = new THREE.Vector3(0, 6, 0);
+const terrainTopByCell = new Map<string, number>();
+
+function cellKey(x: number, z: number): string {
+  return `${x},${z}`;
+}
+
+let worldOffsetX = 0;
+let worldOffsetZ = 0;
+
+function terrainToSceneX(x: number): number {
+  return x + worldOffsetX;
+}
+
+function terrainToSceneZ(z: number): number {
+  return z + worldOffsetZ;
+}
+
+function sceneToTerrainX(x: number): number {
+  return x - worldOffsetX;
+}
+
+function sceneToTerrainZ(z: number): number {
+  return z - worldOffsetZ;
+}
+
+function getTerrainTopY(terrainX: number, terrainZ: number): number | null {
+  const cellX = Math.floor(terrainX);
+  const cellZ = Math.floor(terrainZ);
+  const topY = terrainTopByCell.get(cellKey(cellX, cellZ));
+  return topY ?? null;
+}
+
+function canOccupyCell(terrainX: number, terrainZ: number): boolean {
+  return getTerrainTopY(terrainX, terrainZ) !== null;
+}
+
+const player = new THREE.Group();
+
+const playerBody = new THREE.Mesh(
+  new THREE.BoxGeometry(0.9, 1.2, 0.9),
+  new THREE.MeshStandardMaterial({ color: 0x22d3ee, roughness: 0.65, metalness: 0.05 })
+);
+playerBody.position.y = 0.6;
+
+const playerHead = new THREE.Mesh(
+  new THREE.BoxGeometry(0.8, 0.8, 0.8),
+  new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.6, metalness: 0.02 })
+);
+playerHead.position.y = 1.6;
+
+const playerMarker = new THREE.Mesh(
+  new THREE.RingGeometry(0.62, 0.78, 24),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+);
+playerMarker.rotation.x = -Math.PI / 2;
+playerMarker.position.y = 0.02;
+
+player.add(playerBody, playerHead, playerMarker);
+player.position.copy(playerSpawnTerrainPosition);
+scene.add(player);
+
+const playerTerrainPos = new THREE.Vector3(playerSpawnTerrainPosition.x, playerSpawnTerrainPosition.y, playerSpawnTerrainPosition.z);
+const currentMoveDir = new THREE.Vector3();
+const candidateTerrainPos = new THREE.Vector3();
+const collisionProbe = new THREE.Vector3();
+const upAxis = new THREE.Vector3(0, 1, 0);
+
+const PLAYER_MOVE_SPEED = 4.25;
+const STEP_UP_LIMIT = 1;
+const INPUT_LERP = 0.25;
+const EPS = 1e-5;
+
+function syncPlayerScenePositionFromTerrain(): void {
+  player.position.set(
+    terrainToSceneX(playerTerrainPos.x),
+    playerTerrainPos.y,
+    terrainToSceneZ(playerTerrainPos.z)
+  );
+}
 
 textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   atlasTexture.magFilter = THREE.NearestFilter;
@@ -111,6 +190,14 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
         return BASE_HEIGHT + Math.round((noiseValue - 0.5) * HEIGHT_AMPLITUDE * 2);
       }, SEA_LEVEL);
 
+      for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+        for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
+          const worldX = chunkX * CHUNK_SIZE + localX;
+          const worldZ = chunkZ * CHUNK_SIZE + localZ;
+          terrainTopByCell.set(cellKey(worldX, worldZ), chunk.getTopSolidY(localX, localZ));
+        }
+      }
+
       const geometry = buildChunkGreedyGeometry({
         chunk,
         blockTiles: {
@@ -130,44 +217,23 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       if (chunkX === 0 && chunkZ === 0) {
         const centerX = Math.floor(CHUNK_SIZE / 2);
         const centerZ = Math.floor(CHUNK_SIZE / 2);
-        playerSpawnPosition.set(
-          chunkX * CHUNK_SIZE + centerX,
+        playerSpawnTerrainPosition.set(
+          chunkX * CHUNK_SIZE + centerX + 0.5,
           chunk.getTopSolidY(centerX, centerZ) + 1,
-          chunkZ * CHUNK_SIZE + centerZ
+          chunkZ * CHUNK_SIZE + centerZ + 0.5
         );
       }
     }
   }
 
   const worldWidth = (WORLD_CHUNK_RADIUS * 2 + 1) * CHUNK_SIZE;
-  worldRoot.position.set(-worldWidth / 2, 0, -worldWidth / 2);
-  player.position.copy(playerSpawnPosition).add(worldRoot.position);
+  worldOffsetX = -worldWidth / 2;
+  worldOffsetZ = -worldWidth / 2;
+  worldRoot.position.set(worldOffsetX, 0, worldOffsetZ);
+
+  playerTerrainPos.copy(playerSpawnTerrainPosition);
+  syncPlayerScenePositionFromTerrain();
 });
-
-const player = new THREE.Group();
-
-const playerBody = new THREE.Mesh(
-  new THREE.BoxGeometry(0.9, 1.2, 0.9),
-  new THREE.MeshStandardMaterial({ color: 0x22d3ee, roughness: 0.65, metalness: 0.05 })
-);
-playerBody.position.y = 0.6;
-
-const playerHead = new THREE.Mesh(
-  new THREE.BoxGeometry(0.8, 0.8, 0.8),
-  new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.6, metalness: 0.02 })
-);
-playerHead.position.y = 1.6;
-
-const playerMarker = new THREE.Mesh(
-  new THREE.RingGeometry(0.62, 0.78, 24),
-  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
-);
-playerMarker.rotation.x = -Math.PI / 2;
-playerMarker.position.y = 0.02;
-
-player.add(playerBody, playerHead, playerMarker);
-player.position.copy(playerSpawnPosition);
-scene.add(player);
 
 const followOffset = new THREE.Vector3();
 let followPlayer = true;
@@ -251,13 +317,36 @@ function recenterIfPlayerTapped(clientX: number, clientY: number): void {
   }
 }
 
-window.addEventListener('keydown', (event) => {
-  if (event.repeat) return;
+const movementKeys = new Set<string>();
+const keyAlias: Record<string, string> = {
+  arrowup: 'w',
+  arrowdown: 's',
+  arrowleft: 'a',
+  arrowright: 'd'
+};
 
-  if (event.key.toLowerCase() === 'q') {
-    rotateSnap(-1);
-  } else if (event.key.toLowerCase() === 'e') {
-    rotateSnap(1);
+window.addEventListener('keydown', (event) => {
+  const key = event.key.toLowerCase();
+
+  if (!event.repeat) {
+    if (key === 'q') {
+      rotateSnap(-1);
+    } else if (key === 'e') {
+      rotateSnap(1);
+    }
+  }
+
+  const mapped = keyAlias[key] ?? key;
+  if (mapped === 'w' || mapped === 'a' || mapped === 's' || mapped === 'd') {
+    movementKeys.add(mapped);
+  }
+});
+
+window.addEventListener('keyup', (event) => {
+  const key = event.key.toLowerCase();
+  const mapped = keyAlias[key] ?? key;
+  if (mapped === 'w' || mapped === 'a' || mapped === 's' || mapped === 'd') {
+    movementKeys.delete(mapped);
   }
 });
 
@@ -441,7 +530,76 @@ renderer.domElement.addEventListener(
   { passive: true }
 );
 
+function applyPlayerMovement(deltaSeconds: number): void {
+  if (terrainTopByCell.size === 0) {
+    return;
+  }
+
+  const inputX = (movementKeys.has('d') ? 1 : 0) - (movementKeys.has('a') ? 1 : 0);
+  const inputZ = (movementKeys.has('w') ? 1 : 0) - (movementKeys.has('s') ? 1 : 0);
+
+  camera.getWorldDirection(projectedForward);
+  projectedForward.y = 0;
+  if (projectedForward.lengthSq() < EPS) {
+    projectedForward.set(0, 0, 1);
+  } else {
+    projectedForward.normalize();
+  }
+
+  projectedRight.crossVectors(projectedForward, upAxis).normalize();
+
+  const desiredMoveDir = new THREE.Vector3();
+  if (inputX !== 0 || inputZ !== 0) {
+    desiredMoveDir
+      .addScaledVector(projectedRight, inputX)
+      .addScaledVector(projectedForward, inputZ)
+      .normalize();
+  }
+
+  currentMoveDir.lerp(desiredMoveDir, inputX !== 0 || inputZ !== 0 ? INPUT_LERP : 0.35);
+  if (currentMoveDir.lengthSq() < EPS) {
+    currentMoveDir.set(0, 0, 0);
+    return;
+  }
+
+  candidateTerrainPos.copy(playerTerrainPos).addScaledVector(currentMoveDir, PLAYER_MOVE_SPEED * deltaSeconds);
+
+  collisionProbe.set(candidateTerrainPos.x, 0, playerTerrainPos.z);
+  if (canOccupyCell(collisionProbe.x, collisionProbe.z)) {
+    const nextTopY = getTerrainTopY(collisionProbe.x, collisionProbe.z)!;
+    if (nextTopY - (playerTerrainPos.y - 1) <= STEP_UP_LIMIT) {
+      playerTerrainPos.x = candidateTerrainPos.x;
+      playerTerrainPos.y = nextTopY + 1;
+    }
+  }
+
+  collisionProbe.set(playerTerrainPos.x, 0, candidateTerrainPos.z);
+  if (canOccupyCell(collisionProbe.x, collisionProbe.z)) {
+    const nextTopY = getTerrainTopY(collisionProbe.x, collisionProbe.z)!;
+    if (nextTopY - (playerTerrainPos.y - 1) <= STEP_UP_LIMIT) {
+      playerTerrainPos.z = candidateTerrainPos.z;
+      playerTerrainPos.y = nextTopY + 1;
+    }
+  }
+
+  const currentTopY = getTerrainTopY(playerTerrainPos.x, playerTerrainPos.z);
+  if (currentTopY !== null) {
+    playerTerrainPos.y = currentTopY + 1;
+  }
+
+  syncPlayerScenePositionFromTerrain();
+}
+
+const cameraTarget = new THREE.Vector3();
+const spherical = new THREE.Spherical();
+const cameraOffset = new THREE.Vector3();
+
+let lastFrameMs = performance.now();
+
 function animate(timeMs: number): void {
+  const deltaSeconds = Math.min(0.05, Math.max(0, (timeMs - lastFrameMs) / 1000));
+  lastFrameMs = timeMs;
+
   if (rotationStartMs > 0) {
     const t = THREE.MathUtils.clamp((timeMs - rotationStartMs) / ROTATE_DURATION_MS, 0, 1);
     const eased = t * (2 - t);
@@ -452,19 +610,21 @@ function animate(timeMs: number): void {
     }
   }
 
+  applyPlayerMovement(deltaSeconds);
+
   currentFrustumSize = THREE.MathUtils.lerp(currentFrustumSize, desiredFrustumSize, 0.18);
   updateCameraProjection();
 
-  const target = new THREE.Vector3().copy(player.position);
+  cameraTarget.copy(player.position);
   if (!followPlayer) {
-    target.add(followOffset);
+    cameraTarget.add(followOffset);
   }
 
-  const spherical = new THREE.Spherical(BASE_CAMERA_DISTANCE, Math.PI / 2 - ISO_ELEVATION, yawCurrent);
-  const cameraOffset = new THREE.Vector3().setFromSpherical(spherical);
+  spherical.set(BASE_CAMERA_DISTANCE, Math.PI / 2 - ISO_ELEVATION, yawCurrent);
+  cameraOffset.setFromSpherical(spherical);
 
-  camera.position.copy(target).add(cameraOffset);
-  camera.lookAt(target);
+  camera.position.copy(cameraTarget).add(cameraOffset);
+  camera.lookAt(cameraTarget);
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
