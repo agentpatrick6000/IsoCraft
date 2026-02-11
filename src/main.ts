@@ -82,7 +82,7 @@ const BASE_HEIGHT = 5;
 const HEIGHT_AMPLITUDE = 3;
 const HEIGHT_NOISE_SCALE = 0.05;
 
-let playerSpawnY = 6;
+const playerSpawnPosition = new THREE.Vector3(0, 6, 0);
 
 textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   atlasTexture.magFilter = THREE.NearestFilter;
@@ -128,21 +128,45 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       worldRoot.add(chunkMesh);
 
       if (chunkX === 0 && chunkZ === 0) {
-        playerSpawnY = chunk.getTopSolidY(Math.floor(CHUNK_SIZE / 2), Math.floor(CHUNK_SIZE / 2)) + 1.1;
+        const centerX = Math.floor(CHUNK_SIZE / 2);
+        const centerZ = Math.floor(CHUNK_SIZE / 2);
+        playerSpawnPosition.set(
+          chunkX * CHUNK_SIZE + centerX,
+          chunk.getTopSolidY(centerX, centerZ) + 1,
+          chunkZ * CHUNK_SIZE + centerZ
+        );
       }
     }
   }
 
   const worldWidth = (WORLD_CHUNK_RADIUS * 2 + 1) * CHUNK_SIZE;
   worldRoot.position.set(-worldWidth / 2, 0, -worldWidth / 2);
-  player.position.y = playerSpawnY;
+  player.position.copy(playerSpawnPosition).add(worldRoot.position);
 });
 
-const player = new THREE.Mesh(
-  new THREE.BoxGeometry(1, 0.2, 1),
-  new THREE.MeshStandardMaterial({ color: 0xeab308 })
+const player = new THREE.Group();
+
+const playerBody = new THREE.Mesh(
+  new THREE.BoxGeometry(0.9, 1.2, 0.9),
+  new THREE.MeshStandardMaterial({ color: 0x22d3ee, roughness: 0.65, metalness: 0.05 })
 );
-player.position.set(0, playerSpawnY, 0);
+playerBody.position.y = 0.6;
+
+const playerHead = new THREE.Mesh(
+  new THREE.BoxGeometry(0.8, 0.8, 0.8),
+  new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.6, metalness: 0.02 })
+);
+playerHead.position.y = 1.6;
+
+const playerMarker = new THREE.Mesh(
+  new THREE.RingGeometry(0.62, 0.78, 24),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
+);
+playerMarker.rotation.x = -Math.PI / 2;
+playerMarker.position.y = 0.02;
+
+player.add(playerBody, playerHead, playerMarker);
+player.position.copy(playerSpawnPosition);
 scene.add(player);
 
 const followOffset = new THREE.Vector3();
@@ -219,7 +243,7 @@ function recenterIfPlayerTapped(clientX: number, clientY: number): void {
   pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
   raycaster.setFromCamera(pointerNdc, camera);
-  const hits = raycaster.intersectObject(player, false);
+  const hits = raycaster.intersectObject(player, true);
 
   if (hits.length > 0) {
     followPlayer = true;
