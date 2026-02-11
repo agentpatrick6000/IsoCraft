@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { createVoxelBlockMesh, type FaceTileMap } from './voxel';
+import type { FaceTileMap } from './voxel';
+import { BlockId, Chunk, buildChunkGreedyGeometry } from './terrain';
 
 const app = document.getElementById('app');
 if (!app) {
@@ -24,9 +25,8 @@ let currentFrustumSize: number = ZOOM_LEVELS[zoomLevel];
 let desiredFrustumSize: number = currentFrustumSize;
 
 const textureLoader = new THREE.TextureLoader();
-
-const atlasPreviewRoot = new THREE.Group();
-scene.add(atlasPreviewRoot);
+const worldRoot = new THREE.Group();
+scene.add(worldRoot);
 
 const grassTiles: FaceTileMap = {
   top: 0,
@@ -37,31 +37,56 @@ const grassTiles: FaceTileMap = {
   west: 1
 };
 
-textureLoader.load('/textures/atlas.png', (atlasTexture) => {
-  const grassBlock = createVoxelBlockMesh({ atlasTexture, tiles: grassTiles });
-  grassBlock.position.set(0, 0.5, 0);
-  atlasPreviewRoot.add(grassBlock);
+const dirtTiles: FaceTileMap = {
+  top: 2,
+  bottom: 2,
+  north: 2,
+  south: 2,
+  east: 2,
+  west: 2
+};
 
-  const stoneBlock = createVoxelBlockMesh({
-    atlasTexture,
-    tiles: {
-      top: 3,
-      bottom: 3,
-      north: 3,
-      south: 3,
-      east: 3,
-      west: 3
+const stoneTiles: FaceTileMap = {
+  top: 3,
+  bottom: 3,
+  north: 3,
+  south: 3,
+  east: 3,
+  west: 3
+};
+
+textureLoader.load('/textures/atlas.png', (atlasTexture) => {
+  atlasTexture.magFilter = THREE.NearestFilter;
+  atlasTexture.minFilter = THREE.NearestFilter;
+  atlasTexture.generateMipmaps = false;
+  atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
+  atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
+  atlasTexture.colorSpace = THREE.SRGBColorSpace;
+
+  const chunk = new Chunk(16, 8, 16);
+  chunk.fillFlatLayers(3);
+
+  const geometry = buildChunkGreedyGeometry({
+    chunk,
+    blockTiles: {
+      [BlockId.Air]: grassTiles,
+      [BlockId.Grass]: grassTiles,
+      [BlockId.Dirt]: dirtTiles,
+      [BlockId.Stone]: stoneTiles
     }
   });
-  stoneBlock.position.set(1, 0.5, 0);
-  atlasPreviewRoot.add(stoneBlock);
+
+  const material = new THREE.MeshStandardMaterial({ map: atlasTexture });
+  const chunkMesh = new THREE.Mesh(geometry, material);
+  chunkMesh.position.set(-8, 0, -8);
+  worldRoot.add(chunkMesh);
 });
 
 const player = new THREE.Mesh(
   new THREE.BoxGeometry(1, 0.2, 1),
   new THREE.MeshStandardMaterial({ color: 0xeab308 })
 );
-player.position.y = 0.1;
+player.position.set(0, 4.1, 0);
 scene.add(player);
 
 const followOffset = new THREE.Vector3();
@@ -128,18 +153,6 @@ sun.position.set(20, 28, 14);
 sun.target.position.set(0, 0, 0);
 scene.add(sun);
 scene.add(sun.target);
-
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(64, 64, 1, 1),
-  new THREE.MeshStandardMaterial({ color: 0x3fa34d, roughness: 1 })
-);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = false;
-scene.add(ground);
-
-const grid = new THREE.GridHelper(64, 64, 0x1f2937, 0x475569);
-grid.position.y = 0.01;
-scene.add(grid);
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
