@@ -738,8 +738,54 @@ const blockMiningTimeMs: Partial<Record<BlockId, number>> = {
   [BlockId.Stone]: 1200,
   [BlockId.CoalOre]: 1650,
   [BlockId.IronOre]: 1850,
-  [BlockId.GoldOre]: 2200
+  [BlockId.GoldOre]: 2200,
+  [BlockId.Planks]: 520,
+  [BlockId.CraftingTable]: 820,
+  [BlockId.Furnace]: 1700
 };
+
+function preferredToolForBlock(block: BlockId): ToolType | null {
+  if (block === BlockId.Stone || block === BlockId.CoalOre || block === BlockId.IronOre || block === BlockId.GoldOre || block === BlockId.Furnace) {
+    return 'pickaxe';
+  }
+  if (block === BlockId.WoodLog || block === BlockId.Planks || block === BlockId.CraftingTable) {
+    return 'axe';
+  }
+  if (block === BlockId.Dirt || block === BlockId.Grass || block === BlockId.Sand) {
+    return 'shovel';
+  }
+  return null;
+}
+
+function isSoftBreakableByHand(block: BlockId): boolean {
+  return block === BlockId.Dirt || block === BlockId.Grass || block === BlockId.Sand || block === BlockId.Leaves || block === BlockId.WoodLog;
+}
+
+function getMiningDurationMs(targetBlock: BlockId, stack: InventoryStack | null): number | null {
+  const base = blockMiningTimeMs[targetBlock] ?? 800;
+  const preferredTool = preferredToolForBlock(targetBlock);
+
+  if (!stack) {
+    if (!isSoftBreakableByHand(targetBlock)) {
+      return null;
+    }
+    return base;
+  }
+
+  const toolStats = getToolStats(stack.block);
+  if (!toolStats) {
+    if (!isSoftBreakableByHand(targetBlock)) {
+      return null;
+    }
+    return base;
+  }
+
+  if (preferredTool && preferredTool !== toolStats.type) {
+    return base * 4;
+  }
+
+  return base / toolTierSpeedMultiplier[toolStats.tier];
+}
 
 const miningOverlay = document.createElement('div');
 miningOverlay.style.position = 'fixed';
@@ -768,6 +814,8 @@ let selectedPlaceBlock: BlockId | null = BlockId.Dirt;
 type InventoryStack = {
   block: BlockId;
   count: number;
+  durability?: number;
+  maxDurability?: number;
 };
 
 type ItemVisual = {
@@ -797,13 +845,61 @@ const itemVisualByBlock: Partial<Record<BlockId, ItemVisual>> = {
   [BlockId.Torch]: { label: 'Torch', tile: 15, color: '#f5cd4d' }
 };
 
+type ToolType = 'pickaxe' | 'axe' | 'shovel';
+type ToolTier = 'wood' | 'stone' | 'iron';
+type ToolStats = {
+  type: ToolType;
+  tier: ToolTier;
+  maxDurability: number;
+};
+
+const toolStatsByBlock: Partial<Record<BlockId, ToolStats>> = {
+  [BlockId.WoodenPickaxe]: { type: 'pickaxe', tier: 'wood', maxDurability: 60 },
+  [BlockId.WoodenAxe]: { type: 'axe', tier: 'wood', maxDurability: 72 },
+  [BlockId.WoodenShovel]: { type: 'shovel', tier: 'wood', maxDurability: 66 },
+  [BlockId.StonePickaxe]: { type: 'pickaxe', tier: 'stone', maxDurability: 132 }
+};
+
+const toolTierSpeedMultiplier: Record<ToolTier, number> = {
+  wood: 1,
+  stone: 1.5,
+  iron: 2
+};
+
+function getToolStats(block: BlockId): ToolStats | null {
+  return toolStatsByBlock[block] ?? null;
+}
+
+function stackLimitForBlock(block: BlockId): number {
+  return getToolStats(block) ? 1 : INVENTORY_STACK_LIMIT;
+}
+
+function cloneStack(stack: InventoryStack): InventoryStack {
+  return { block: stack.block, count: stack.count, durability: stack.durability, maxDurability: stack.maxDurability };
+}
+
+function makeStack(block: BlockId, count: number): InventoryStack {
+  const tool = getToolStats(block);
+  if (tool) {
+    return { block, count: 1, durability: tool.maxDurability, maxDurability: tool.maxDurability };
+  }
+  return { block, count };
+}
+
+function canStacksMerge(a: InventoryStack, b: InventoryStack): boolean {
+  if (a.block !== b.block) return false;
+  const tool = getToolStats(a.block);
+  if (!tool) return true;
+  return a.durability === b.durability && a.maxDurability === b.maxDurability;
+}
+
 const HOTBAR_SLOT_COUNT = 5;
 const BACKPACK_SLOT_COUNT = 20;
 const TOTAL_INVENTORY_SLOTS = HOTBAR_SLOT_COUNT + BACKPACK_SLOT_COUNT;
 const INVENTORY_STACK_LIMIT = 64;
 
 const inventorySlots: Array<InventoryStack | null> = Array.from({ length: TOTAL_INVENTORY_SLOTS }, () => null);
-inventorySlots[0] = { block: BlockId.Dirt, count: 48 };
+inventorySlots[0] = makeStack(BlockId.Dirt, 48);
 
 let selectedHotbarIndex = 0;
 let selectedInventoryIndex: number | null = null;
@@ -829,6 +925,7 @@ app.appendChild(hotbarRoot);
 const hotbarButtons: HTMLButtonElement[] = [];
 const hotbarIcons: HTMLDivElement[] = [];
 const hotbarCounts: HTMLSpanElement[] = [];
+const hotbarDurabilityBars: HTMLDivElement[] = [];
 
 function applyIconStyle(icon: HTMLDivElement, block: BlockId | null): void {
   if (block === null) {
@@ -887,7 +984,24 @@ for (let index = 0; index < HOTBAR_SLOT_COUNT; index++) {
   count.style.textShadow = '0 1px 2px rgba(0,0,0,0.9)';
   count.textContent = '';
 
-  button.append(icon, count);
+  const durabilityTrack = document.createElement('div');
+  durabilityTrack.style.position = 'absolute';
+  durabilityTrack.style.left = '5px';
+  durabilityTrack.style.right = '5px';
+  durabilityTrack.style.bottom = '4px';
+  durabilityTrack.style.height = '4px';
+  durabilityTrack.style.borderRadius = '999px';
+  durabilityTrack.style.background = 'rgba(0,0,0,0.55)';
+  durabilityTrack.style.overflow = 'hidden';
+  durabilityTrack.style.display = 'none';
+
+  const durabilityBar = document.createElement('div');
+  durabilityBar.style.height = '100%';
+  durabilityBar.style.width = '100%';
+  durabilityBar.style.background = 'linear-gradient(90deg, #ef4444, #f59e0b, #22c55e)';
+  durabilityTrack.appendChild(durabilityBar);
+
+  button.append(icon, count, durabilityTrack);
 
   const selectSlot = (event: Event) => {
     event.preventDefault();
@@ -902,6 +1016,7 @@ for (let index = 0; index < HOTBAR_SLOT_COUNT; index++) {
   hotbarButtons.push(button);
   hotbarIcons.push(icon);
   hotbarCounts.push(count);
+  hotbarDurabilityBars.push(durabilityBar);
   hotbarRoot.appendChild(button);
 }
 
@@ -1112,13 +1227,28 @@ function updateHeldItemVisual(): void {
 }
 
 function canAddItemToInventory(block: BlockId, amount = 1): boolean {
+  const tool = getToolStats(block);
+  if (tool) {
+    let emptySlots = 0;
+    for (let i = 0; i < TOTAL_INVENTORY_SLOTS; i++) {
+      if (!inventorySlots[i]) {
+        emptySlots += 1;
+      }
+      if (emptySlots >= amount) {
+        return true;
+      }
+    }
+    return emptySlots >= amount;
+  }
+
   let capacity = 0;
+  const limit = stackLimitForBlock(block);
   for (let i = 0; i < TOTAL_INVENTORY_SLOTS; i++) {
     const slot = inventorySlots[i];
     if (!slot) {
-      capacity += INVENTORY_STACK_LIMIT;
+      capacity += limit;
     } else if (slot.block === block) {
-      capacity += INVENTORY_STACK_LIMIT - slot.count;
+      capacity += limit - slot.count;
     }
     if (capacity >= amount) {
       return true;
@@ -1130,20 +1260,24 @@ function canAddItemToInventory(block: BlockId, amount = 1): boolean {
 
 function addItemToInventory(block: BlockId, amount = 1): number {
   let remaining = amount;
+  const tool = getToolStats(block);
 
-  for (let i = 0; i < TOTAL_INVENTORY_SLOTS && remaining > 0; i++) {
-    const stack = inventorySlots[i];
-    if (!stack || stack.block !== block || stack.count >= INVENTORY_STACK_LIMIT) continue;
-    const room = INVENTORY_STACK_LIMIT - stack.count;
-    const transfer = Math.min(room, remaining);
-    stack.count += transfer;
-    remaining -= transfer;
+  if (!tool) {
+    const limit = stackLimitForBlock(block);
+    for (let i = 0; i < TOTAL_INVENTORY_SLOTS && remaining > 0; i++) {
+      const stack = inventorySlots[i];
+      if (!stack || stack.block !== block || stack.count >= limit) continue;
+      const room = limit - stack.count;
+      const transfer = Math.min(room, remaining);
+      stack.count += transfer;
+      remaining -= transfer;
+    }
   }
 
   for (let i = 0; i < TOTAL_INVENTORY_SLOTS && remaining > 0; i++) {
     if (inventorySlots[i]) continue;
-    const transfer = Math.min(INVENTORY_STACK_LIMIT, remaining);
-    inventorySlots[i] = { block, count: transfer };
+    const transfer = tool ? 1 : Math.min(stackLimitForBlock(block), remaining);
+    inventorySlots[i] = makeStack(block, transfer);
     remaining -= transfer;
   }
 
@@ -1175,17 +1309,17 @@ function moveInventorySelection(targetIndex: number): void {
   }
 
   if (!targetStack) {
-    inventorySlots[targetIndex] = sourceStack;
+    inventorySlots[targetIndex] = cloneStack(sourceStack);
     inventorySlots[sourceIndex] = null;
-  } else if (targetStack.block === sourceStack.block) {
-    const room = INVENTORY_STACK_LIMIT - targetStack.count;
+  } else if (canStacksMerge(targetStack, sourceStack)) {
+    const room = stackLimitForBlock(targetStack.block) - targetStack.count;
     const transfer = Math.min(room, sourceStack.count);
     targetStack.count += transfer;
     sourceStack.count -= transfer;
     if (sourceStack.count <= 0) inventorySlots[sourceIndex] = null;
   } else {
-    inventorySlots[targetIndex] = sourceStack;
-    inventorySlots[sourceIndex] = targetStack;
+    inventorySlots[targetIndex] = cloneStack(sourceStack);
+    inventorySlots[sourceIndex] = cloneStack(targetStack);
   }
 
   selectedInventoryIndex = null;
@@ -1226,7 +1360,16 @@ function refreshPlacementHud(): void {
     const button = hotbarButtons[i];
     const stack = inventorySlots[i];
     applyIconStyle(hotbarIcons[i], stack?.block ?? null);
-    hotbarCounts[i].textContent = stack ? String(stack.count) : '';
+    hotbarCounts[i].textContent = stack && (getToolStats(stack.block) ? stack.count > 1 : true) ? String(stack.count) : '';
+
+    const durabilityBar = hotbarDurabilityBars[i];
+    if (stack && getToolStats(stack.block) && stack.maxDurability && stack.durability !== undefined && stack.durability < stack.maxDurability) {
+      const ratio = THREE.MathUtils.clamp(stack.durability / stack.maxDurability, 0, 1);
+      durabilityBar.parentElement!.style.display = 'block';
+      durabilityBar.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+    } else {
+      durabilityBar.parentElement!.style.display = 'none';
+    }
 
     const isSelected = i === selectedHotbarIndex;
     button.style.border = isSelected ? '2px solid #facc15' : '2px solid rgba(255,255,255,0.2)';
@@ -1268,7 +1411,11 @@ function refreshPlacementHud(): void {
   }
 
   const label = itemVisualByBlock[selectedStack.block]?.label ?? 'Item';
-  placementHud.textContent = `Selected: ${label} (${selectedStack.count}) — RMB / long-press to place`;
+  const durabilityText =
+    selectedStack.maxDurability && selectedStack.durability !== undefined
+      ? ` • Durability ${selectedStack.durability}/${selectedStack.maxDurability}`
+      : '';
+  placementHud.textContent = `Selected: ${label} (${selectedStack.count})${durabilityText} — RMB / long-press to place`;
 }
 
 backpackButton.addEventListener('click', (event) => {
@@ -1715,6 +1862,7 @@ craftingOverlay.addEventListener('click', () => {
 refreshPlacementHud();
 
 let activeMiningTarget: MiningTarget | null = null;
+let activeMiningToolSlotIndex: number | null = null;
 let miningStartMs = 0;
 let miningDurationMs = 0;
 let miningGhost: THREE.Mesh | null = null;
@@ -1833,9 +1981,17 @@ function getMiningTargetFromTap(clientX: number, clientY: number): MiningTarget 
 }
 
 function startMining(target: MiningTarget): void {
+  const selectedStack = getSelectedHotbarStack();
+  const duration = getMiningDurationMs(target.block, selectedStack);
+  if (duration === null) {
+    placementHud.textContent = 'Need proper tool: only soft blocks break by hand.';
+    return;
+  }
+
   activeMiningTarget = target;
+  activeMiningToolSlotIndex = selectedHotbarIndex;
   miningStartMs = performance.now();
-  miningDurationMs = blockMiningTimeMs[target.block] ?? 800;
+  miningDurationMs = duration;
   miningOverlay.style.display = 'block';
   miningFill.style.width = '0%';
 }
@@ -1924,6 +2080,75 @@ function beginBreakAnimation(target: MiningTarget): void {
   miningGhost.position.set(terrainToSceneX(target.worldX + 0.5), target.worldY + 0.5, terrainToSceneZ(target.worldZ + 0.5));
   miningGhost.userData.spawnMs = performance.now();
   scene.add(miningGhost);
+}
+
+function playToolBreakFx(): void {
+  if (!heldItemMesh) {
+    return;
+  }
+
+  const flash = new THREE.Mesh(
+    new THREE.BoxGeometry(0.24, 0.24, 0.24),
+    new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, opacity: 0.85 })
+  );
+  flash.position.copy(heldItemMesh.position);
+  player.add(flash);
+
+  const spawnMs = performance.now();
+  flash.userData.spawnMs = spawnMs;
+
+  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(780, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(180, audioCtx.currentTime + 0.11);
+  gain.gain.setValueAtTime(0.025, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.11);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.11);
+
+  const tick = () => {
+    const age = performance.now() - spawnMs;
+    const t = THREE.MathUtils.clamp(age / 140, 0, 1);
+    flash.scale.setScalar(1 + t * 0.8);
+    (flash.material as THREE.MeshBasicMaterial).opacity = 0.85 * (1 - t);
+    if (t >= 1) {
+      player.remove(flash);
+      flash.geometry.dispose();
+      (flash.material as THREE.MeshBasicMaterial).dispose();
+      return;
+    }
+    requestAnimationFrame(tick);
+  };
+
+  requestAnimationFrame(tick);
+}
+
+function consumeToolDurabilityForMining(slotIndex: number | null): void {
+  if (slotIndex === null) return;
+  const stack = inventorySlots[slotIndex];
+  if (!stack) return;
+  const tool = getToolStats(stack.block);
+  if (!tool) return;
+
+  if (stack.durability === undefined || stack.maxDurability === undefined) {
+    stack.maxDurability = tool.maxDurability;
+    stack.durability = tool.maxDurability;
+  }
+
+  stack.durability = Math.max(0, (stack.durability ?? 0) - 1);
+  if (stack.durability <= 0) {
+    stack.count -= 1;
+    if (stack.count <= 0) {
+      inventorySlots[slotIndex] = null;
+      if (slotIndex === selectedHotbarIndex) {
+        playToolBreakFx();
+      }
+    }
+  }
 }
 
 function getBlockAtWorld(worldX: number, worldY: number, worldZ: number): { record: WorldChunk; localX: number; localZ: number; chunkX: number; chunkZ: number } | null {
@@ -2483,7 +2708,9 @@ function animate(timeMs: number): void {
 
     if (progress >= 1) {
       const target = activeMiningTarget;
+      const usedToolSlot = activeMiningToolSlotIndex;
       activeMiningTarget = null;
+      activeMiningToolSlotIndex = null;
       miningOverlay.style.display = 'none';
 
       const record = worldChunkByKey.get(worldChunkKey(target.chunkX, target.chunkZ));
@@ -2492,12 +2719,14 @@ function animate(timeMs: number): void {
         updateTopYForColumn(target.chunkX, target.chunkZ, target.localX, target.localZ);
         rebuildChunkMeshes(record, blockTilesById);
         beginBreakAnimation(target);
+        consumeToolDurabilityForMining(usedToolSlot);
 
         const stored = addToInventory(target.block, 1);
         if (stored < 1) {
           spawnDroppedItem(target.block, target.worldX, target.worldY, target.worldZ);
         }
       }
+      refreshPlacementHud();
     }
   }
 
