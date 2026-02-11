@@ -247,6 +247,109 @@ export class Chunk {
     }
   }
 
+
+  addCaves(options: { worldChunkX: number; worldChunkZ: number; chunkSize: number; seed?: number }): void {
+    const { worldChunkX, worldChunkZ, chunkSize, seed = 31841 } = options;
+
+    const surfaceHeights = new Uint8Array(this.width * this.depth);
+    for (let x = 0; x < this.width; x++) {
+      for (let z = 0; z < this.depth; z++) {
+        surfaceHeights[x + z * this.width] = this.getTopSolidY(x, z);
+      }
+    }
+
+    const caveFrequency = 0.12;
+    const warpFrequency = 0.21;
+
+    for (let localX = 0; localX < this.width; localX++) {
+      for (let localZ = 0; localZ < this.depth; localZ++) {
+        const worldX = worldChunkX * chunkSize + localX;
+        const worldZ = worldChunkZ * chunkSize + localZ;
+        const surfaceY = surfaceHeights[localX + localZ * this.width];
+
+        const entranceNoise = fbm2d(worldX * 0.08, worldZ * 0.08, {
+          seed: seed + 911,
+          octaves: 2,
+          lacunarity: 2,
+          gain: 0.5
+        });
+        const entranceGate = hash2d(worldX, worldZ, seed + 1223);
+        const allowEntrance = entranceNoise > 0.7 && entranceGate > 0.76;
+
+        for (let y = 1; y < this.height - 1; y++) {
+          const block = this.get(localX, y, localZ);
+          if (block !== BlockId.Stone && block !== BlockId.Dirt) {
+            continue;
+          }
+
+          const depthFromSurface = surfaceY - y;
+          if (depthFromSurface < 1) {
+            continue;
+          }
+
+          const warpX =
+            (fbm3d(worldX * warpFrequency, y * warpFrequency, worldZ * warpFrequency, {
+              seed: seed + 37,
+              octaves: 2,
+              lacunarity: 2,
+              gain: 0.5
+            }) - 0.5) *
+            0.8;
+          const warpY =
+            (fbm3d(worldX * warpFrequency, y * warpFrequency, worldZ * warpFrequency, {
+              seed: seed + 71,
+              octaves: 2,
+              lacunarity: 2,
+              gain: 0.5
+            }) - 0.5) *
+            0.65;
+          const warpZ =
+            (fbm3d(worldX * warpFrequency, y * warpFrequency, worldZ * warpFrequency, {
+              seed: seed + 109,
+              octaves: 2,
+              lacunarity: 2,
+              gain: 0.5
+            }) - 0.5) *
+            0.8;
+
+          const caveBody = fbm3d((worldX + warpX) * caveFrequency, (y + warpY) * caveFrequency, (worldZ + warpZ) * caveFrequency, {
+            seed,
+            octaves: 3,
+            lacunarity: 2,
+            gain: 0.5
+          });
+
+          const caveDetail = fbm3d(worldX * caveFrequency * 1.9, y * caveFrequency * 2.2, worldZ * caveFrequency * 1.9, {
+            seed: seed + 157,
+            octaves: 2,
+            lacunarity: 2,
+            gain: 0.45
+          });
+
+          const caveValue = caveBody * 0.72 + caveDetail * 0.28;
+          const deepThreshold = 0.645;
+          const nearSurfaceThreshold = 0.735;
+          const threshold = depthFromSurface >= 3 ? deepThreshold : nearSurfaceThreshold;
+
+          if (caveValue < threshold) {
+            continue;
+          }
+
+          if (depthFromSurface < 3 && !allowEntrance) {
+            continue;
+          }
+
+          this.set(localX, y, localZ, BlockId.Air);
+
+          const upper = this.get(localX, y + 1, localZ);
+          if (upper === BlockId.Stone || upper === BlockId.Dirt || (allowEntrance && upper === BlockId.Grass)) {
+            this.set(localX, y + 1, localZ, BlockId.Air);
+          }
+        }
+      }
+    }
+  }
+
   private carveOreVein(
     centerX: number,
     centerY: number,

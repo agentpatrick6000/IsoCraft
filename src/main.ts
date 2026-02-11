@@ -481,6 +481,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
 
         return BASE_HEIGHT + Math.round((noiseValue - 0.5) * HEIGHT_AMPLITUDE * 2);
       }, SEA_LEVEL);
+      chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
       chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
       chunk.addTrees({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 13371 });
 
