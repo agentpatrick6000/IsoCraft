@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import Stats from 'three/addons/libs/stats.module.js';
 import type { FaceTileMap } from './voxel';
 import { fbm2d } from './noise';
 import { BlockId, Chunk, buildChunkGreedyGeometry } from './terrain';
@@ -24,6 +25,17 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.appendChild(renderer.domElement);
+
+const stats = new Stats();
+stats.showPanel(0);
+stats.dom.style.position = 'fixed';
+stats.dom.style.top = '8px';
+stats.dom.style.left = '8px';
+stats.dom.style.zIndex = '20';
+app.appendChild(stats.dom);
+
+const FRAME_BUDGET_MS = 1000 / 60;
+let frameBudgetWarnCooldownMs = 0;
 
 const camera = new THREE.OrthographicCamera();
 const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
@@ -843,8 +855,19 @@ const cameraOffset = new THREE.Vector3();
 let lastFrameMs = performance.now();
 
 function animate(timeMs: number): void {
-  const deltaSeconds = Math.min(0.05, Math.max(0, (timeMs - lastFrameMs) / 1000));
+  stats.begin();
+
+  const frameTimeMs = Math.max(0, timeMs - lastFrameMs);
+  const deltaSeconds = Math.min(0.05, frameTimeMs / 1000);
   lastFrameMs = timeMs;
+
+  if (frameTimeMs > FRAME_BUDGET_MS && timeMs >= frameBudgetWarnCooldownMs) {
+    const overBudgetMs = frameTimeMs - FRAME_BUDGET_MS;
+    console.warn(
+      `[perf] frame time ${frameTimeMs.toFixed(2)}ms exceeds 60fps budget by ${overBudgetMs.toFixed(2)}ms`
+    );
+    frameBudgetWarnCooldownMs = timeMs + 1500;
+  }
 
   if (rotationStartMs > 0) {
     const t = THREE.MathUtils.clamp((timeMs - rotationStartMs) / ROTATE_DURATION_MS, 0, 1);
@@ -873,6 +896,7 @@ function animate(timeMs: number): void {
   camera.lookAt(cameraTarget);
 
   renderer.render(scene, camera);
+  stats.end();
   requestAnimationFrame(animate);
 }
 
