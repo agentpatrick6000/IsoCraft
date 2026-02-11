@@ -112,6 +112,33 @@ const leavesTiles: FaceTileMap = {
   west: 8
 };
 
+const coalOreTiles: FaceTileMap = {
+  top: 9,
+  bottom: 9,
+  north: 9,
+  south: 9,
+  east: 9,
+  west: 9
+};
+
+const ironOreTiles: FaceTileMap = {
+  top: 10,
+  bottom: 10,
+  north: 10,
+  south: 10,
+  east: 10,
+  west: 10
+};
+
+const goldOreTiles: FaceTileMap = {
+  top: 11,
+  bottom: 11,
+  north: 11,
+  south: 11,
+  east: 11,
+  west: 11
+};
+
 const WORLD_CHUNK_RADIUS = 2;
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 12;
@@ -366,7 +393,62 @@ function syncPlayerScenePositionFromTerrain(): void {
   );
 }
 
+function paintOreTilesOnAtlas(atlasTexture: THREE.Texture): void {
+  const atlasImage = atlasTexture.image as HTMLImageElement | undefined;
+  if (!atlasImage) {
+    return;
+  }
+
+  const tileSize = 16;
+  const canvas = document.createElement('canvas');
+  canvas.width = atlasImage.width;
+  canvas.height = atlasImage.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return;
+  }
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(atlasImage, 0, 0);
+
+  const stoneTileX = (3 % 4) * tileSize;
+  const stoneTileY = Math.floor(3 / 4) * tileSize;
+
+  type OrePattern = { tileIndex: number; tint: string; fleckCount: number; seed: number };
+  const orePatterns: OrePattern[] = [
+    { tileIndex: 9, tint: '#2f2f34', fleckCount: 14, seed: 101 },
+    { tileIndex: 10, tint: '#b7936a', fleckCount: 13, seed: 202 },
+    { tileIndex: 11, tint: '#f7c845', fleckCount: 12, seed: 303 }
+  ];
+
+  const rand = (x: number, y: number, seed: number): number => {
+    const n = Math.sin((x + 1) * 83.7 + (y + 1) * 29.3 + seed * 11.9) * 43758.5453;
+    return n - Math.floor(n);
+  };
+
+  for (const ore of orePatterns) {
+    const tileX = (ore.tileIndex % 4) * tileSize;
+    const tileY = Math.floor(ore.tileIndex / 4) * tileSize;
+
+    ctx.drawImage(canvas, stoneTileX, stoneTileY, tileSize, tileSize, tileX, tileY, tileSize, tileSize);
+    ctx.fillStyle = ore.tint;
+
+    for (let i = 0; i < ore.fleckCount; i++) {
+      const px = Math.floor(rand(i, ore.seed, 7) * (tileSize - 3));
+      const py = Math.floor(rand(i, ore.seed, 19) * (tileSize - 3));
+      const w = rand(i, ore.seed, 31) > 0.6 ? 2 : 1;
+      const h = rand(i, ore.seed, 47) > 0.7 ? 2 : 1;
+      ctx.fillRect(tileX + px, tileY + py, w, h);
+    }
+  }
+
+  atlasTexture.image = canvas;
+  atlasTexture.needsUpdate = true;
+}
+
 textureLoader.load('/textures/atlas.png', (atlasTexture) => {
+  paintOreTilesOnAtlas(atlasTexture);
+
   atlasTexture.magFilter = THREE.NearestFilter;
   atlasTexture.minFilter = THREE.NearestFilter;
   atlasTexture.generateMipmaps = false;
@@ -399,6 +481,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
 
         return BASE_HEIGHT + Math.round((noiseValue - 0.5) * HEIGHT_AMPLITUDE * 2);
       }, SEA_LEVEL);
+      chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
       chunk.addTrees({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 13371 });
 
       for (let localX = 0; localX < CHUNK_SIZE; localX++) {
@@ -417,7 +500,10 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
         [BlockId.Sand]: sandTiles,
         [BlockId.Water]: waterTiles,
         [BlockId.WoodLog]: woodLogTiles,
-        [BlockId.Leaves]: leavesTiles
+        [BlockId.Leaves]: leavesTiles,
+        [BlockId.CoalOre]: coalOreTiles,
+        [BlockId.IronOre]: ironOreTiles,
+        [BlockId.GoldOre]: goldOreTiles
       };
 
       const terrainGeometry = buildChunkGreedyGeometry({

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { fbm2d } from './noise';
+import { fbm2d, fbm3d } from './noise';
 import type { BlockFace, FaceTileMap } from './voxel';
 
 export enum BlockId {
@@ -10,7 +10,10 @@ export enum BlockId {
   Sand = 4,
   Water = 5,
   WoodLog = 6,
-  Leaves = 7
+  Leaves = 7,
+  CoalOre = 8,
+  IronOre = 9,
+  GoldOre = 10
 }
 
 type MaskCell = {
@@ -158,6 +161,139 @@ export class Chunk {
     }
   }
 
+  addOreDeposits(options: { worldChunkX: number; worldChunkZ: number; chunkSize: number; seed?: number }): void {
+    const { worldChunkX, worldChunkZ, chunkSize, seed = 22091 } = options;
+
+    const oreConfigs: Array<{
+      block: BlockId;
+      minY: number;
+      maxY: number;
+      clusterMin: number;
+      clusterMax: number;
+      frequency: number;
+      threshold: number;
+      seedOffset: number;
+    }> = [
+      {
+        block: BlockId.GoldOre,
+        minY: 0,
+        maxY: 15,
+        clusterMin: 2,
+        clusterMax: 4,
+        frequency: 0.18,
+        threshold: 0.66,
+        seedOffset: 701
+      },
+      {
+        block: BlockId.IronOre,
+        minY: 0,
+        maxY: 30,
+        clusterMin: 3,
+        clusterMax: 5,
+        frequency: 0.16,
+        threshold: 0.62,
+        seedOffset: 401
+      },
+      {
+        block: BlockId.CoalOre,
+        minY: 0,
+        maxY: 40,
+        clusterMin: 4,
+        clusterMax: 8,
+        frequency: 0.14,
+        threshold: 0.58,
+        seedOffset: 101
+      }
+    ];
+
+    for (const ore of oreConfigs) {
+      const minY = THREE.MathUtils.clamp(ore.minY, 0, this.height - 1);
+      const maxY = THREE.MathUtils.clamp(ore.maxY, 0, this.height - 1);
+      if (minY > maxY) {
+        continue;
+      }
+
+      for (let localX = 0; localX < this.width; localX++) {
+        for (let localZ = 0; localZ < this.depth; localZ++) {
+          const worldX = worldChunkX * chunkSize + localX;
+          const worldZ = worldChunkZ * chunkSize + localZ;
+
+          for (let y = minY; y <= maxY; y++) {
+            if (this.get(localX, y, localZ) !== BlockId.Stone) {
+              continue;
+            }
+
+            const veinNoise = fbm3d(worldX * ore.frequency, y * ore.frequency, worldZ * ore.frequency, {
+              seed: seed + ore.seedOffset,
+              octaves: 3,
+              lacunarity: 2,
+              gain: 0.5
+            });
+
+            if (veinNoise < ore.threshold) {
+              continue;
+            }
+
+            const rarityGate = hash3d(worldX, y, worldZ, seed + ore.seedOffset * 3);
+            if (rarityGate < 0.9) {
+              continue;
+            }
+
+            const clusterSize = ore.clusterMin + Math.floor(hash3d(worldX, y, worldZ, seed + ore.seedOffset * 5) * (ore.clusterMax - ore.clusterMin + 1));
+            this.carveOreVein(localX, y, localZ, ore.block, clusterSize, worldX, worldZ, seed + ore.seedOffset * 7);
+          }
+        }
+      }
+    }
+  }
+
+  private carveOreVein(
+    centerX: number,
+    centerY: number,
+    centerZ: number,
+    oreBlock: BlockId,
+    targetSize: number,
+    worldX: number,
+    worldZ: number,
+    seed: number
+  ): void {
+    const offsets: Array<{ x: number; y: number; z: number; score: number }> = [];
+
+    for (let ox = -2; ox <= 2; ox++) {
+      for (let oy = -2; oy <= 2; oy++) {
+        for (let oz = -2; oz <= 2; oz++) {
+          const distance = Math.abs(ox) + Math.abs(oy) + Math.abs(oz);
+          if (distance > 4) {
+            continue;
+          }
+
+          const score = hash3d(worldX + ox, centerY + oy, worldZ + oz, seed) - distance * 0.12;
+          offsets.push({ x: ox, y: oy, z: oz, score });
+        }
+      }
+    }
+
+    offsets.sort((a, b) => b.score - a.score);
+
+    let placed = 0;
+    for (const offset of offsets) {
+      if (placed >= targetSize) {
+        break;
+      }
+
+      const x = centerX + offset.x;
+      const y = centerY + offset.y;
+      const z = centerZ + offset.z;
+
+      if (this.get(x, y, z) !== BlockId.Stone) {
+        continue;
+      }
+
+      this.set(x, y, z, oreBlock);
+      placed += 1;
+    }
+  }
+
   getTopSolidY(x: number, z: number): number {
     for (let y = this.height - 1; y >= 0; y--) {
       const block = this.get(x, y, z);
@@ -171,6 +307,11 @@ export class Chunk {
 
 function hash2d(x: number, z: number, seed: number): number {
   const s = Math.sin(x * 127.1 + z * 311.7 + seed * 17.23) * 43758.5453123;
+  return s - Math.floor(s);
+}
+
+function hash3d(x: number, y: number, z: number, seed: number): number {
+  const s = Math.sin(x * 157.1 + y * 113.3 + z * 271.9 + seed * 19.17) * 43758.5453123;
   return s - Math.floor(s);
 }
 
