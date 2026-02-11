@@ -84,6 +84,21 @@ const HEIGHT_NOISE_SCALE = 0.05;
 
 const playerSpawnTerrainPosition = new THREE.Vector3(0, 6, 0);
 const terrainTopByCell = new Map<string, number>();
+const terrainMeshes: THREE.Mesh[] = [];
+
+const PATH_LINE_Y_OFFSET = 0.08;
+const MOVE_TARGET_EPSILON = 0.075;
+const MAX_PATH_SEARCH = 5000;
+
+let activePathCells: Array<{ x: number; z: number }> = [];
+let activePathIndex = 0;
+
+const pathLine = new THREE.Line(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 })
+);
+pathLine.renderOrder = 2;
+scene.add(pathLine);
 
 function cellKey(x: number, z: number): string {
   return `${x},${z}`;
@@ -117,6 +132,156 @@ function getTerrainTopY(terrainX: number, terrainZ: number): number | null {
 
 function canOccupyCell(terrainX: number, terrainZ: number): boolean {
   return getTerrainTopY(terrainX, terrainZ) !== null;
+}
+
+function clearActivePath(): void {
+  activePathCells = [];
+  activePathIndex = 0;
+  pathLine.geometry.setFromPoints([]);
+}
+
+function isWalkableCell(x: number, z: number): boolean {
+  return terrainTopByCell.has(cellKey(x, z));
+}
+
+function movementCost(fromX: number, fromZ: number, toX: number, toZ: number): number {
+  const fromY = terrainTopByCell.get(cellKey(fromX, fromZ));
+  const toY = terrainTopByCell.get(cellKey(toX, toZ));
+  if (fromY === undefined || toY === undefined) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const rise = toY - fromY;
+  if (rise > STEP_UP_LIMIT) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return 1 + Math.max(0, rise) * 0.65;
+}
+
+function findPath(startX: number, startZ: number, goalX: number, goalZ: number): Array<{ x: number; z: number }> {
+  if (!isWalkableCell(startX, startZ) || !isWalkableCell(goalX, goalZ)) {
+    return [];
+  }
+
+  if (startX === goalX && startZ === goalZ) {
+    return [{ x: startX, z: startZ }];
+  }
+
+  const openSet = new Set<string>();
+  const closedSet = new Set<string>();
+  const cameFrom = new Map<string, string>();
+  const gScore = new Map<string, number>();
+  const fScore = new Map<string, number>();
+
+  const startKey = cellKey(startX, startZ);
+  const goalKey = cellKey(goalX, goalZ);
+
+  const heuristic = (x: number, z: number): number => Math.abs(goalX - x) + Math.abs(goalZ - z);
+
+  openSet.add(startKey);
+  gScore.set(startKey, 0);
+  fScore.set(startKey, heuristic(startX, startZ));
+
+  let explored = 0;
+
+  while (openSet.size > 0 && explored < MAX_PATH_SEARCH) {
+    explored += 1;
+
+    let currentKey = '';
+    let currentF = Number.POSITIVE_INFINITY;
+
+    for (const key of openSet) {
+      const score = fScore.get(key) ?? Number.POSITIVE_INFINITY;
+      if (score < currentF) {
+        currentF = score;
+        currentKey = key;
+      }
+    }
+
+    if (!currentKey) {
+      break;
+    }
+
+    if (currentKey === goalKey) {
+      const path: Array<{ x: number; z: number }> = [];
+      let traceKey: string | undefined = currentKey;
+      while (traceKey) {
+        const [xText, zText] = traceKey.split(',');
+        path.push({ x: Number.parseInt(xText, 10), z: Number.parseInt(zText, 10) });
+        traceKey = cameFrom.get(traceKey);
+      }
+      path.reverse();
+      return path;
+    }
+
+    openSet.delete(currentKey);
+    closedSet.add(currentKey);
+
+    const [cxText, czText] = currentKey.split(',');
+    const cx = Number.parseInt(cxText, 10);
+    const cz = Number.parseInt(czText, 10);
+
+    const neighbors = [
+      { x: cx + 1, z: cz },
+      { x: cx - 1, z: cz },
+      { x: cx, z: cz + 1 },
+      { x: cx, z: cz - 1 }
+    ];
+
+    for (const neighbor of neighbors) {
+      if (!isWalkableCell(neighbor.x, neighbor.z)) {
+        continue;
+      }
+
+      const neighborKey = cellKey(neighbor.x, neighbor.z);
+      if (closedSet.has(neighborKey)) {
+        continue;
+      }
+
+      const stepCost = movementCost(cx, cz, neighbor.x, neighbor.z);
+      if (!Number.isFinite(stepCost)) {
+        continue;
+      }
+
+      const tentativeG = (gScore.get(currentKey) ?? Number.POSITIVE_INFINITY) + stepCost;
+      if (tentativeG >= (gScore.get(neighborKey) ?? Number.POSITIVE_INFINITY)) {
+        continue;
+      }
+
+      cameFrom.set(neighborKey, currentKey);
+      gScore.set(neighborKey, tentativeG);
+      fScore.set(neighborKey, tentativeG + heuristic(neighbor.x, neighbor.z));
+      openSet.add(neighborKey);
+    }
+  }
+
+  return [];
+}
+
+function rebuildPathVisual(): void {
+  if (activePathCells.length <= 1 || activePathIndex >= activePathCells.length - 1) {
+    pathLine.geometry.setFromPoints([]);
+    return;
+  }
+
+  const points: THREE.Vector3[] = [];
+  for (let i = activePathIndex; i < activePathCells.length; i++) {
+    const cell = activePathCells[i];
+    const topY = terrainTopByCell.get(cellKey(cell.x, cell.z));
+    if (topY === undefined) {
+      continue;
+    }
+    points.push(
+      new THREE.Vector3(
+        terrainToSceneX(cell.x + 0.5),
+        topY + 1 + PATH_LINE_Y_OFFSET,
+        terrainToSceneZ(cell.z + 0.5)
+      )
+    );
+  }
+
+  pathLine.geometry.setFromPoints(points);
 }
 
 const player = new THREE.Group();
@@ -213,6 +378,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       const chunkMesh = new THREE.Mesh(geometry, material);
       chunkMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
       worldRoot.add(chunkMesh);
+      terrainMeshes.push(chunkMesh);
 
       if (chunkX === 0 && chunkZ === 0) {
         const centerX = Math.floor(CHUNK_SIZE / 2);
@@ -303,10 +469,14 @@ scene.add(sun.target);
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 
-function recenterIfPlayerTapped(clientX: number, clientY: number): void {
+function screenToNdc(clientX: number, clientY: number): void {
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function recenterIfPlayerTapped(clientX: number, clientY: number): boolean {
+  screenToNdc(clientX, clientY);
 
   raycaster.setFromCamera(pointerNdc, camera);
   const hits = raycaster.intersectObject(player, true);
@@ -314,7 +484,53 @@ function recenterIfPlayerTapped(clientX: number, clientY: number): void {
   if (hits.length > 0) {
     followPlayer = true;
     followOffset.set(0, 0, 0);
+    clearActivePath();
+    return true;
   }
+
+  return false;
+}
+
+function setTapMoveTarget(clientX: number, clientY: number): void {
+  if (terrainMeshes.length === 0) {
+    return;
+  }
+
+  screenToNdc(clientX, clientY);
+  raycaster.setFromCamera(pointerNdc, camera);
+
+  const terrainHits = raycaster.intersectObjects(terrainMeshes, false);
+  if (terrainHits.length === 0) {
+    clearActivePath();
+    return;
+  }
+
+  const hit = terrainHits[0];
+  const terrainX = sceneToTerrainX(hit.point.x);
+  const terrainZ = sceneToTerrainZ(hit.point.z);
+
+  const startX = Math.floor(playerTerrainPos.x);
+  const startZ = Math.floor(playerTerrainPos.z);
+  const goalX = Math.floor(terrainX);
+  const goalZ = Math.floor(terrainZ);
+
+  const path = findPath(startX, startZ, goalX, goalZ);
+  if (path.length <= 1) {
+    clearActivePath();
+    return;
+  }
+
+  activePathCells = path;
+  activePathIndex = 1;
+  rebuildPathVisual();
+}
+
+function handleTap(clientX: number, clientY: number): void {
+  if (recenterIfPlayerTapped(clientX, clientY)) {
+    return;
+  }
+
+  setTapMoveTarget(clientX, clientY);
 }
 
 const movementKeys = new Set<string>();
@@ -401,7 +617,7 @@ renderer.domElement.addEventListener('click', (event) => {
     didMousePan = false;
     return;
   }
-  recenterIfPlayerTapped(event.clientX, event.clientY);
+  handleTap(event.clientX, event.clientY);
 });
 
 type ActiveTouchState = {
@@ -515,7 +731,7 @@ renderer.domElement.addEventListener(
   (event) => {
     if (!activeTouch.dragMoved && event.changedTouches.length > 0) {
       const touch = event.changedTouches[0];
-      recenterIfPlayerTapped(touch.clientX, touch.clientY);
+      handleTap(touch.clientX, touch.clientY);
     }
 
     if (event.touches.length > 0) {
@@ -537,6 +753,7 @@ function applyPlayerMovement(deltaSeconds: number): void {
 
   const inputX = (movementKeys.has('d') ? 1 : 0) - (movementKeys.has('a') ? 1 : 0);
   const inputZ = (movementKeys.has('w') ? 1 : 0) - (movementKeys.has('s') ? 1 : 0);
+  const hasKeyboardInput = inputX !== 0 || inputZ !== 0;
 
   camera.getWorldDirection(projectedForward);
   projectedForward.y = 0;
@@ -549,14 +766,31 @@ function applyPlayerMovement(deltaSeconds: number): void {
   projectedRight.crossVectors(projectedForward, upAxis).normalize();
 
   const desiredMoveDir = new THREE.Vector3();
-  if (inputX !== 0 || inputZ !== 0) {
+
+  if (hasKeyboardInput) {
+    clearActivePath();
     desiredMoveDir
       .addScaledVector(projectedRight, inputX)
       .addScaledVector(projectedForward, inputZ)
       .normalize();
+  } else if (activePathCells.length > 0 && activePathIndex < activePathCells.length) {
+    const targetCell = activePathCells[activePathIndex];
+    const targetPos = new THREE.Vector3(targetCell.x + 0.5, 0, targetCell.z + 0.5);
+    const toTarget = targetPos.sub(new THREE.Vector3(playerTerrainPos.x, 0, playerTerrainPos.z));
+
+    if (toTarget.lengthSq() <= MOVE_TARGET_EPSILON * MOVE_TARGET_EPSILON) {
+      activePathIndex += 1;
+      if (activePathIndex >= activePathCells.length) {
+        clearActivePath();
+      } else {
+        rebuildPathVisual();
+      }
+    } else {
+      desiredMoveDir.copy(toTarget.normalize());
+    }
   }
 
-  currentMoveDir.lerp(desiredMoveDir, inputX !== 0 || inputZ !== 0 ? INPUT_LERP : 0.35);
+  currentMoveDir.lerp(desiredMoveDir, hasKeyboardInput ? INPUT_LERP : 0.35);
   if (currentMoveDir.lengthSq() < EPS) {
     currentMoveDir.set(0, 0, 0);
     return;
@@ -585,6 +819,10 @@ function applyPlayerMovement(deltaSeconds: number): void {
   const currentTopY = getTerrainTopY(playerTerrainPos.x, playerTerrainPos.z);
   if (currentTopY !== null) {
     playerTerrainPos.y = currentTopY + 1;
+  }
+
+  if (activePathCells.length > 0 && activePathIndex < activePathCells.length) {
+    rebuildPathVisual();
   }
 
   syncPlayerScenePositionFromTerrain();
