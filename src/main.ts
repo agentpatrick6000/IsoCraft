@@ -139,6 +139,20 @@ const goldOreTiles: FaceTileMap = {
   west: 11
 };
 
+const blockTilesById: Record<BlockId, FaceTileMap> = {
+  [BlockId.Air]: grassTiles,
+  [BlockId.Grass]: grassTiles,
+  [BlockId.Dirt]: dirtTiles,
+  [BlockId.Stone]: stoneTiles,
+  [BlockId.Sand]: sandTiles,
+  [BlockId.Water]: waterTiles,
+  [BlockId.WoodLog]: woodLogTiles,
+  [BlockId.Leaves]: leavesTiles,
+  [BlockId.CoalOre]: coalOreTiles,
+  [BlockId.IronOre]: ironOreTiles,
+  [BlockId.GoldOre]: goldOreTiles
+};
+
 const WORLD_CHUNK_RADIUS = 2;
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 12;
@@ -149,7 +163,18 @@ const HEIGHT_NOISE_SCALE = 0.05;
 
 const playerSpawnTerrainPosition = new THREE.Vector3(0, 6, 0);
 const terrainTopByCell = new Map<string, number>();
+
+type WorldChunk = {
+  chunkX: number;
+  chunkZ: number;
+  chunk: Chunk;
+  terrainMesh: THREE.Mesh;
+  leavesMesh: THREE.Mesh;
+};
+
 const terrainMeshes: THREE.Mesh[] = [];
+const worldChunks: WorldChunk[] = [];
+const worldChunkByKey = new Map<string, WorldChunk>();
 
 const PATH_LINE_Y_OFFSET = 0.08;
 const MOVE_TARGET_EPSILON = 0.075;
@@ -193,6 +218,27 @@ function getTerrainTopY(terrainX: number, terrainZ: number): number | null {
   const cellZ = Math.floor(terrainZ);
   const topY = terrainTopByCell.get(cellKey(cellX, cellZ));
   return topY ?? null;
+}
+
+function worldChunkKey(chunkX: number, chunkZ: number): string {
+  return `${chunkX},${chunkZ}`;
+}
+
+function splitChunkAndLocal(worldCoord: number): { chunk: number; local: number } {
+  const chunk = Math.floor(worldCoord / CHUNK_SIZE);
+  const local = worldCoord - chunk * CHUNK_SIZE;
+  return { chunk, local };
+}
+
+function updateTopYForColumn(chunkX: number, chunkZ: number, localX: number, localZ: number): void {
+  const record = worldChunkByKey.get(worldChunkKey(chunkX, chunkZ));
+  if (!record) {
+    return;
+  }
+
+  const worldX = chunkX * CHUNK_SIZE + localX;
+  const worldZ = chunkZ * CHUNK_SIZE + localZ;
+  terrainTopByCell.set(cellKey(worldX, worldZ), record.chunk.getTopSolidY(localX, localZ));
 }
 
 function canOccupyCell(terrainX: number, terrainZ: number): boolean {
@@ -493,30 +539,16 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
         }
       }
 
-      const blockTiles = {
-        [BlockId.Air]: grassTiles,
-        [BlockId.Grass]: grassTiles,
-        [BlockId.Dirt]: dirtTiles,
-        [BlockId.Stone]: stoneTiles,
-        [BlockId.Sand]: sandTiles,
-        [BlockId.Water]: waterTiles,
-        [BlockId.WoodLog]: woodLogTiles,
-        [BlockId.Leaves]: leavesTiles,
-        [BlockId.CoalOre]: coalOreTiles,
-        [BlockId.IronOre]: ironOreTiles,
-        [BlockId.GoldOre]: goldOreTiles
-      };
-
       const terrainGeometry = buildChunkGreedyGeometry({
         chunk,
-        blockTiles,
+        blockTiles: blockTilesById,
         shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves,
         isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves
       });
 
       const leavesGeometry = buildChunkGreedyGeometry({
         chunk,
-        blockTiles,
+        blockTiles: blockTilesById,
         shouldRender: (block) => block === BlockId.Leaves,
         isOpaque: (block) => block === BlockId.Leaves
       });
@@ -530,6 +562,10 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       leavesMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
       leavesMesh.renderOrder = 1;
       worldRoot.add(leavesMesh);
+
+      const record: WorldChunk = { chunkX, chunkZ, chunk, terrainMesh: chunkMesh, leavesMesh };
+      worldChunks.push(record);
+      worldChunkByKey.set(worldChunkKey(chunkX, chunkZ), record);
 
       if (chunkX === 0 && chunkZ === 0) {
         const centerX = Math.floor(CHUNK_SIZE / 2);
@@ -620,6 +656,58 @@ scene.add(sun.target);
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 
+type MiningTarget = {
+  chunkX: number;
+  chunkZ: number;
+  localX: number;
+  localY: number;
+  localZ: number;
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+  block: BlockId;
+};
+
+const blockMiningTimeMs: Partial<Record<BlockId, number>> = {
+  [BlockId.Grass]: 420,
+  [BlockId.Dirt]: 380,
+  [BlockId.Sand]: 360,
+  [BlockId.WoodLog]: 700,
+  [BlockId.Leaves]: 220,
+  [BlockId.Stone]: 1200,
+  [BlockId.CoalOre]: 1650,
+  [BlockId.IronOre]: 1850,
+  [BlockId.GoldOre]: 2200
+};
+
+const miningOverlay = document.createElement('div');
+miningOverlay.style.position = 'fixed';
+miningOverlay.style.left = '50%';
+miningOverlay.style.bottom = '18px';
+miningOverlay.style.transform = 'translateX(-50%)';
+miningOverlay.style.width = '180px';
+miningOverlay.style.height = '10px';
+miningOverlay.style.background = 'rgba(0,0,0,0.45)';
+miningOverlay.style.border = '1px solid rgba(255,255,255,0.45)';
+miningOverlay.style.borderRadius = '999px';
+miningOverlay.style.overflow = 'hidden';
+miningOverlay.style.pointerEvents = 'none';
+miningOverlay.style.display = 'none';
+miningOverlay.style.zIndex = '25';
+
+const miningFill = document.createElement('div');
+miningFill.style.width = '0%';
+miningFill.style.height = '100%';
+miningFill.style.background = 'linear-gradient(90deg, #fde047, #f59e0b)';
+miningOverlay.appendChild(miningFill);
+app.appendChild(miningOverlay);
+
+let activeMiningTarget: MiningTarget | null = null;
+let miningStartMs = 0;
+let miningDurationMs = 0;
+let miningGhost: THREE.Mesh | null = null;
+const droppedItems: THREE.Mesh[] = [];
+
 function screenToNdc(clientX: number, clientY: number): void {
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -676,8 +764,129 @@ function setTapMoveTarget(clientX: number, clientY: number): void {
   rebuildPathVisual();
 }
 
+function getMiningTargetFromTap(clientX: number, clientY: number): MiningTarget | null {
+  if (terrainMeshes.length === 0) {
+    return null;
+  }
+
+  screenToNdc(clientX, clientY);
+  raycaster.setFromCamera(pointerNdc, camera);
+
+  const terrainHits = raycaster.intersectObjects(terrainMeshes, false);
+  if (terrainHits.length === 0) {
+    return null;
+  }
+
+  const hit = terrainHits[0];
+  const terrainPoint = new THREE.Vector3(sceneToTerrainX(hit.point.x), hit.point.y, sceneToTerrainZ(hit.point.z));
+  const inwardNormal = hit.face?.normal.clone().negate() ?? new THREE.Vector3(0, 1, 0);
+  const blockPos = terrainPoint.addScaledVector(inwardNormal, 0.01);
+
+  const worldX = Math.floor(blockPos.x);
+  const worldY = Math.floor(blockPos.y);
+  const worldZ = Math.floor(blockPos.z);
+
+  const xSplit = splitChunkAndLocal(worldX);
+  const zSplit = splitChunkAndLocal(worldZ);
+  const record = worldChunkByKey.get(worldChunkKey(xSplit.chunk, zSplit.chunk));
+  if (!record) {
+    return null;
+  }
+
+  const block = record.chunk.get(xSplit.local, worldY, zSplit.local);
+  if (block === BlockId.Air || block === BlockId.Water) {
+    return null;
+  }
+
+  return {
+    chunkX: xSplit.chunk,
+    chunkZ: zSplit.chunk,
+    localX: xSplit.local,
+    localY: worldY,
+    localZ: zSplit.local,
+    worldX,
+    worldY,
+    worldZ,
+    block
+  };
+}
+
+function startMining(target: MiningTarget): void {
+  activeMiningTarget = target;
+  miningStartMs = performance.now();
+  miningDurationMs = blockMiningTimeMs[target.block] ?? 800;
+  miningOverlay.style.display = 'block';
+  miningFill.style.width = '0%';
+}
+
+function spawnDroppedItem(block: BlockId, worldX: number, worldY: number, worldZ: number): void {
+  const colorMap: Partial<Record<BlockId, number>> = {
+    [BlockId.Grass]: 0x4ade80,
+    [BlockId.Dirt]: 0x8b5a2b,
+    [BlockId.Stone]: 0x9ca3af,
+    [BlockId.Sand]: 0xfde68a,
+    [BlockId.WoodLog]: 0x8b5a2b,
+    [BlockId.Leaves]: 0x22c55e,
+    [BlockId.CoalOre]: 0x4b5563,
+    [BlockId.IronOre]: 0xc08457,
+    [BlockId.GoldOre]: 0xfacc15
+  };
+
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.35, 0.35, 0.35),
+    new THREE.MeshStandardMaterial({ color: colorMap[block] ?? 0xffffff, roughness: 0.6, metalness: 0.05 })
+  );
+  mesh.position.set(terrainToSceneX(worldX + 0.5), worldY + 0.45, terrainToSceneZ(worldZ + 0.5));
+  mesh.userData.spawnMs = performance.now();
+  mesh.userData.baseY = worldY + 0.45;
+  scene.add(mesh);
+  droppedItems.push(mesh);
+}
+
+function rebuildChunkMeshes(record: WorldChunk, blockTiles: Record<BlockId, FaceTileMap>): void {
+  const terrainGeometry = buildChunkGreedyGeometry({
+    chunk: record.chunk,
+    blockTiles,
+    shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves,
+    isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves
+  });
+  record.terrainMesh.geometry.dispose();
+  record.terrainMesh.geometry = terrainGeometry;
+
+  const leavesGeometry = buildChunkGreedyGeometry({
+    chunk: record.chunk,
+    blockTiles,
+    shouldRender: (block) => block === BlockId.Leaves,
+    isOpaque: (block) => block === BlockId.Leaves
+  });
+  record.leavesMesh.geometry.dispose();
+  record.leavesMesh.geometry = leavesGeometry;
+}
+
+function beginBreakAnimation(target: MiningTarget): void {
+  if (miningGhost) {
+    scene.remove(miningGhost);
+    miningGhost = null;
+  }
+
+  miningGhost = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45 })
+  );
+  miningGhost.position.set(terrainToSceneX(target.worldX + 0.5), target.worldY + 0.5, terrainToSceneZ(target.worldZ + 0.5));
+  miningGhost.userData.spawnMs = performance.now();
+  scene.add(miningGhost);
+}
+
 function handleTap(clientX: number, clientY: number): void {
   if (recenterIfPlayerTapped(clientX, clientY)) {
+    return;
+  }
+
+  const target = getMiningTargetFromTap(clientX, clientY);
+  if (target) {
+    clearActivePath();
+    startMining(target);
     return;
   }
 
@@ -1011,6 +1220,57 @@ function animate(timeMs: number): void {
   }
 
   applyPlayerMovement(deltaSeconds);
+
+  if (activeMiningTarget) {
+    const elapsedMs = timeMs - miningStartMs;
+    const progress = THREE.MathUtils.clamp(elapsedMs / Math.max(1, miningDurationMs), 0, 1);
+    miningFill.style.width = `${Math.round(progress * 100)}%`;
+
+    if (progress >= 1) {
+      const target = activeMiningTarget;
+      activeMiningTarget = null;
+      miningOverlay.style.display = 'none';
+
+      const record = worldChunkByKey.get(worldChunkKey(target.chunkX, target.chunkZ));
+      if (record && record.chunk.get(target.localX, target.localY, target.localZ) === target.block) {
+        record.chunk.set(target.localX, target.localY, target.localZ, BlockId.Air);
+        updateTopYForColumn(target.chunkX, target.chunkZ, target.localX, target.localZ);
+        rebuildChunkMeshes(record, blockTilesById);
+        beginBreakAnimation(target);
+        spawnDroppedItem(target.block, target.worldX, target.worldY, target.worldZ);
+      }
+    }
+  }
+
+  if (miningGhost) {
+    const ghostAge = timeMs - (miningGhost.userData.spawnMs as number);
+    const ghostT = THREE.MathUtils.clamp(ghostAge / 180, 0, 1);
+    const scale = THREE.MathUtils.lerp(1, 0.35, ghostT);
+    miningGhost.scale.set(scale, scale, scale);
+    const mat = miningGhost.material as THREE.MeshBasicMaterial;
+    mat.opacity = THREE.MathUtils.lerp(0.45, 0, ghostT);
+    if (ghostT >= 1) {
+      scene.remove(miningGhost);
+      miningGhost.geometry.dispose();
+      mat.dispose();
+      miningGhost = null;
+    }
+  }
+
+  for (let i = droppedItems.length - 1; i >= 0; i--) {
+    const item = droppedItems[i];
+    const ageMs = timeMs - (item.userData.spawnMs as number);
+    const bob = Math.sin(ageMs * 0.005) * 0.08;
+    item.rotation.y += deltaSeconds * 1.2;
+    item.position.y = (item.userData.baseY as number) + bob;
+
+    if (ageMs > 5 * 60 * 1000) {
+      scene.remove(item);
+      item.geometry.dispose();
+      (item.material as THREE.Material).dispose();
+      droppedItems.splice(i, 1);
+    }
+  }
 
   currentFrustumSize = THREE.MathUtils.lerp(currentFrustumSize, desiredFrustumSize, 0.18);
   updateCameraProjection();
