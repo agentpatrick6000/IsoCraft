@@ -717,27 +717,41 @@ miningFill.style.background = 'linear-gradient(90deg, #fde047, #f59e0b)';
 miningOverlay.appendChild(miningFill);
 app.appendChild(miningOverlay);
 
-let selectedPlaceBlock: BlockId = BlockId.Dirt;
-const placeableInventory: Partial<Record<BlockId, number>> = {
-  [BlockId.Dirt]: 48
+let selectedPlaceBlock: BlockId | null = BlockId.Dirt;
+
+type InventoryStack = {
+  block: BlockId;
+  count: number;
 };
 
-type HotbarSlot = {
-  block: BlockId;
+type ItemVisual = {
   label: string;
   tile: number;
   color: string;
 };
 
-const hotbarSlots: HotbarSlot[] = [
-  { block: BlockId.Dirt, label: 'Dirt', tile: 2, color: '#8b5a3c' },
-  { block: BlockId.Grass, label: 'Grass', tile: 0, color: '#3f8f3f' },
-  { block: BlockId.Stone, label: 'Stone', tile: 3, color: '#7b7b84' },
-  { block: BlockId.WoodLog, label: 'Log', tile: 7, color: '#8b6a45' },
-  { block: BlockId.Sand, label: 'Sand', tile: 4, color: '#d8c070' }
-];
+const itemVisualByBlock: Partial<Record<BlockId, ItemVisual>> = {
+  [BlockId.Grass]: { label: 'Grass', tile: 0, color: '#3f8f3f' },
+  [BlockId.Dirt]: { label: 'Dirt', tile: 2, color: '#8b5a3c' },
+  [BlockId.Stone]: { label: 'Stone', tile: 3, color: '#7b7b84' },
+  [BlockId.Sand]: { label: 'Sand', tile: 4, color: '#d8c070' },
+  [BlockId.WoodLog]: { label: 'Log', tile: 7, color: '#8b6a45' },
+  [BlockId.Leaves]: { label: 'Leaves', tile: 8, color: '#58a158' },
+  [BlockId.CoalOre]: { label: 'Coal Ore', tile: 9, color: '#50505a' },
+  [BlockId.IronOre]: { label: 'Iron Ore', tile: 10, color: '#b7936a' },
+  [BlockId.GoldOre]: { label: 'Gold Ore', tile: 11, color: '#f7c845' }
+};
+
+const HOTBAR_SLOT_COUNT = 5;
+const BACKPACK_SLOT_COUNT = 20;
+const TOTAL_INVENTORY_SLOTS = HOTBAR_SLOT_COUNT + BACKPACK_SLOT_COUNT;
+const INVENTORY_STACK_LIMIT = 64;
+
+const inventorySlots: Array<InventoryStack | null> = Array.from({ length: TOTAL_INVENTORY_SLOTS }, () => null);
+inventorySlots[0] = { block: BlockId.Dirt, count: 48 };
 
 let selectedHotbarIndex = 0;
+let selectedInventoryIndex: number | null = null;
 
 const hotbarRoot = document.createElement('div');
 hotbarRoot.style.position = 'fixed';
@@ -745,6 +759,7 @@ hotbarRoot.style.left = '50%';
 hotbarRoot.style.bottom = '16px';
 hotbarRoot.style.transform = 'translateX(-50%)';
 hotbarRoot.style.display = 'flex';
+hotbarRoot.style.alignItems = 'center';
 hotbarRoot.style.gap = '8px';
 hotbarRoot.style.padding = '8px 10px';
 hotbarRoot.style.borderRadius = '14px';
@@ -756,14 +771,35 @@ hotbarRoot.style.pointerEvents = 'none';
 app.appendChild(hotbarRoot);
 
 const hotbarButtons: HTMLButtonElement[] = [];
+const hotbarIcons: HTMLDivElement[] = [];
 const hotbarCounts: HTMLSpanElement[] = [];
 
-for (let index = 0; index < hotbarSlots.length; index++) {
-  const slot = hotbarSlots[index];
+function applyIconStyle(icon: HTMLDivElement, block: BlockId | null): void {
+  if (block === null) {
+    icon.style.backgroundImage = 'none';
+    icon.style.backgroundColor = 'rgba(255,255,255,0.06)';
+    return;
+  }
+
+  const visual = itemVisualByBlock[block];
+  if (!visual) {
+    icon.style.backgroundImage = 'none';
+    icon.style.backgroundColor = 'rgba(255,255,255,0.06)';
+    return;
+  }
+
+  const tileX = (visual.tile % 4) * 16;
+  const tileY = Math.floor(visual.tile / 4) * 16;
+  icon.style.backgroundColor = visual.color;
+  icon.style.backgroundImage = "url('/textures/atlas.png')";
+  icon.style.backgroundRepeat = 'no-repeat';
+  icon.style.backgroundSize = '64px 64px';
+  icon.style.backgroundPosition = `-${tileX}px -${tileY}px`;
+}
+
+for (let index = 0; index < HOTBAR_SLOT_COUNT; index++) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.title = slot.label;
-  button.ariaLabel = `${slot.label} slot`;
   button.style.width = '52px';
   button.style.height = '52px';
   button.style.borderRadius = '10px';
@@ -782,14 +818,7 @@ for (let index = 0; index < hotbarSlots.length; index++) {
   icon.style.height = '28px';
   icon.style.borderRadius = '6px';
   icon.style.imageRendering = 'pixelated';
-  icon.style.backgroundColor = slot.color;
   icon.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.15)';
-  icon.style.backgroundImage = "url('/textures/atlas.png')";
-  icon.style.backgroundRepeat = 'no-repeat';
-  icon.style.backgroundSize = '64px 64px';
-  const tileX = (slot.tile % 4) * 16;
-  const tileY = Math.floor(slot.tile / 4) * 16;
-  icon.style.backgroundPosition = `-${tileX}px -${tileY}px`;
 
   const count = document.createElement('span');
   count.style.position = 'absolute';
@@ -800,7 +829,7 @@ for (let index = 0; index < hotbarSlots.length; index++) {
   count.style.fontSize = '13px';
   count.style.fontWeight = '700';
   count.style.textShadow = '0 1px 2px rgba(0,0,0,0.9)';
-  count.textContent = '0';
+  count.textContent = '';
 
   button.append(icon, count);
 
@@ -808,7 +837,6 @@ for (let index = 0; index < hotbarSlots.length; index++) {
     event.preventDefault();
     event.stopPropagation();
     selectedHotbarIndex = index;
-    selectedPlaceBlock = hotbarSlots[selectedHotbarIndex].block;
     refreshPlacementHud();
   };
 
@@ -816,8 +844,221 @@ for (let index = 0; index < hotbarSlots.length; index++) {
   button.addEventListener('touchstart', selectSlot, { passive: false });
 
   hotbarButtons.push(button);
+  hotbarIcons.push(icon);
   hotbarCounts.push(count);
   hotbarRoot.appendChild(button);
+}
+
+const backpackButton = document.createElement('button');
+backpackButton.type = 'button';
+backpackButton.textContent = '🎒';
+backpackButton.title = 'Inventory';
+backpackButton.style.width = '44px';
+backpackButton.style.height = '44px';
+backpackButton.style.borderRadius = '10px';
+backpackButton.style.border = '2px solid rgba(255,255,255,0.2)';
+backpackButton.style.background = 'rgba(0,0,0,0.58)';
+backpackButton.style.color = '#fff';
+backpackButton.style.fontSize = '20px';
+backpackButton.style.pointerEvents = 'auto';
+backpackButton.style.touchAction = 'manipulation';
+hotbarRoot.appendChild(backpackButton);
+
+const inventoryOverlay = document.createElement('div');
+inventoryOverlay.style.position = 'fixed';
+inventoryOverlay.style.inset = '0';
+inventoryOverlay.style.background = 'rgba(0,0,0,0.6)';
+inventoryOverlay.style.display = 'none';
+inventoryOverlay.style.alignItems = 'center';
+inventoryOverlay.style.justifyContent = 'center';
+inventoryOverlay.style.zIndex = '40';
+inventoryOverlay.style.pointerEvents = 'auto';
+app.appendChild(inventoryOverlay);
+
+const inventoryPanel = document.createElement('div');
+inventoryPanel.style.width = 'min(92vw, 460px)';
+inventoryPanel.style.maxHeight = '84vh';
+inventoryPanel.style.overflow = 'auto';
+inventoryPanel.style.background = 'rgba(14,16,22,0.94)';
+inventoryPanel.style.border = '1px solid rgba(255,255,255,0.2)';
+inventoryPanel.style.borderRadius = '14px';
+inventoryPanel.style.padding = '14px';
+inventoryPanel.style.color = '#fff';
+inventoryPanel.style.fontFamily = 'system-ui, sans-serif';
+inventoryPanel.addEventListener('click', (event) => event.stopPropagation());
+inventoryOverlay.appendChild(inventoryPanel);
+
+const inventoryHeader = document.createElement('div');
+inventoryHeader.style.display = 'flex';
+inventoryHeader.style.justifyContent = 'space-between';
+inventoryHeader.style.alignItems = 'center';
+inventoryHeader.style.marginBottom = '12px';
+
+const inventoryTitle = document.createElement('strong');
+inventoryTitle.textContent = 'Inventory';
+
+const inventoryCloseButton = document.createElement('button');
+inventoryCloseButton.type = 'button';
+inventoryCloseButton.textContent = 'Close';
+inventoryCloseButton.style.borderRadius = '8px';
+inventoryCloseButton.style.border = '1px solid rgba(255,255,255,0.25)';
+inventoryCloseButton.style.background = 'rgba(255,255,255,0.08)';
+inventoryCloseButton.style.color = '#fff';
+inventoryCloseButton.style.padding = '5px 10px';
+inventoryHeader.append(inventoryTitle, inventoryCloseButton);
+inventoryPanel.appendChild(inventoryHeader);
+
+const inventoryGrid = document.createElement('div');
+inventoryGrid.style.display = 'grid';
+inventoryGrid.style.gridTemplateColumns = 'repeat(5, minmax(0, 1fr))';
+inventoryGrid.style.gap = '8px';
+inventoryPanel.appendChild(inventoryGrid);
+
+const inventoryHotbarLabel = document.createElement('div');
+inventoryHotbarLabel.textContent = 'Hotbar';
+inventoryHotbarLabel.style.marginTop = '14px';
+inventoryHotbarLabel.style.marginBottom = '8px';
+inventoryHotbarLabel.style.fontSize = '13px';
+inventoryHotbarLabel.style.opacity = '0.85';
+inventoryPanel.appendChild(inventoryHotbarLabel);
+
+const inventoryHotbarGrid = document.createElement('div');
+inventoryHotbarGrid.style.display = 'grid';
+inventoryHotbarGrid.style.gridTemplateColumns = 'repeat(5, minmax(0, 1fr))';
+inventoryHotbarGrid.style.gap = '8px';
+inventoryPanel.appendChild(inventoryHotbarGrid);
+
+const inventorySelectionInfo = document.createElement('div');
+inventorySelectionInfo.style.marginTop = '12px';
+inventorySelectionInfo.style.fontSize = '13px';
+inventorySelectionInfo.style.opacity = '0.9';
+inventorySelectionInfo.textContent = 'Tap an item, then tap destination to move.';
+inventoryPanel.appendChild(inventorySelectionInfo);
+
+const inventoryButtons: HTMLButtonElement[] = [];
+const inventoryIcons: HTMLDivElement[] = [];
+const inventoryCounts: HTMLSpanElement[] = [];
+
+function createInventorySlotButton(slotIndex: number): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.style.height = '54px';
+  button.style.borderRadius = '10px';
+  button.style.border = '2px solid rgba(255,255,255,0.2)';
+  button.style.background = 'rgba(0,0,0,0.55)';
+  button.style.position = 'relative';
+  button.style.padding = '0';
+
+  const icon = document.createElement('div');
+  icon.style.position = 'absolute';
+  icon.style.left = '8px';
+  icon.style.top = '8px';
+  icon.style.width = '28px';
+  icon.style.height = '28px';
+  icon.style.borderRadius = '6px';
+  icon.style.imageRendering = 'pixelated';
+  icon.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.15)';
+
+  const count = document.createElement('span');
+  count.style.position = 'absolute';
+  count.style.right = '6px';
+  count.style.bottom = '5px';
+  count.style.color = '#fff';
+  count.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+  count.style.fontSize = '12px';
+  count.style.fontWeight = '700';
+  count.style.textShadow = '0 1px 2px rgba(0,0,0,0.9)';
+
+  button.append(icon, count);
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    moveInventorySelection(slotIndex);
+  });
+
+  inventoryIcons[slotIndex] = icon;
+  inventoryCounts[slotIndex] = count;
+  inventoryButtons[slotIndex] = button;
+  return button;
+}
+
+for (let i = HOTBAR_SLOT_COUNT; i < TOTAL_INVENTORY_SLOTS; i++) {
+  inventoryGrid.appendChild(createInventorySlotButton(i));
+}
+for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+  inventoryHotbarGrid.appendChild(createInventorySlotButton(i));
+}
+
+function stackLabel(stack: InventoryStack | null): string {
+  if (!stack) return 'Empty';
+  return itemVisualByBlock[stack.block]?.label ?? 'Item';
+}
+
+function getSelectedHotbarStack(): InventoryStack | null {
+  return inventorySlots[selectedHotbarIndex];
+}
+
+function addItemToInventory(block: BlockId, amount = 1): number {
+  let remaining = amount;
+
+  for (let i = 0; i < TOTAL_INVENTORY_SLOTS && remaining > 0; i++) {
+    const stack = inventorySlots[i];
+    if (!stack || stack.block !== block || stack.count >= INVENTORY_STACK_LIMIT) continue;
+    const room = INVENTORY_STACK_LIMIT - stack.count;
+    const transfer = Math.min(room, remaining);
+    stack.count += transfer;
+    remaining -= transfer;
+  }
+
+  for (let i = 0; i < TOTAL_INVENTORY_SLOTS && remaining > 0; i++) {
+    if (inventorySlots[i]) continue;
+    const transfer = Math.min(INVENTORY_STACK_LIMIT, remaining);
+    inventorySlots[i] = { block, count: transfer };
+    remaining -= transfer;
+  }
+
+  refreshPlacementHud();
+  return amount - remaining;
+}
+
+function moveInventorySelection(targetIndex: number): void {
+  const targetStack = inventorySlots[targetIndex];
+  if (selectedInventoryIndex === null) {
+    if (!targetStack) return;
+    selectedInventoryIndex = targetIndex;
+    refreshPlacementHud();
+    return;
+  }
+
+  if (selectedInventoryIndex === targetIndex) {
+    selectedInventoryIndex = null;
+    refreshPlacementHud();
+    return;
+  }
+
+  const sourceIndex = selectedInventoryIndex;
+  const sourceStack = inventorySlots[sourceIndex];
+  if (!sourceStack) {
+    selectedInventoryIndex = null;
+    refreshPlacementHud();
+    return;
+  }
+
+  if (!targetStack) {
+    inventorySlots[targetIndex] = sourceStack;
+    inventorySlots[sourceIndex] = null;
+  } else if (targetStack.block === sourceStack.block) {
+    const room = INVENTORY_STACK_LIMIT - targetStack.count;
+    const transfer = Math.min(room, sourceStack.count);
+    targetStack.count += transfer;
+    sourceStack.count -= transfer;
+    if (sourceStack.count <= 0) inventorySlots[sourceIndex] = null;
+  } else {
+    inventorySlots[targetIndex] = sourceStack;
+    inventorySlots[sourceIndex] = targetStack;
+  }
+
+  selectedInventoryIndex = null;
+  refreshPlacementHud();
 }
 
 const placementHud = document.createElement('div');
@@ -847,23 +1088,76 @@ scene.add(placementPreview);
 let activePlacementTarget: PlacementTarget | null = null;
 
 function refreshPlacementHud(): void {
-  const selectedSlot = hotbarSlots[selectedHotbarIndex];
-  const count = placeableInventory[selectedSlot.block] ?? 0;
+  const selectedStack = getSelectedHotbarStack();
+  selectedPlaceBlock = selectedStack?.block ?? null;
 
-  for (let i = 0; i < hotbarSlots.length; i++) {
-    const slot = hotbarSlots[i];
+  for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
     const button = hotbarButtons[i];
-    const slotCount = placeableInventory[slot.block] ?? 0;
-    hotbarCounts[i].textContent = String(slotCount);
+    const stack = inventorySlots[i];
+    applyIconStyle(hotbarIcons[i], stack?.block ?? null);
+    hotbarCounts[i].textContent = stack ? String(stack.count) : '';
 
     const isSelected = i === selectedHotbarIndex;
     button.style.border = isSelected ? '2px solid #facc15' : '2px solid rgba(255,255,255,0.2)';
     button.style.boxShadow = isSelected ? '0 0 0 1px rgba(250,204,21,0.35)' : 'none';
-    button.style.opacity = slotCount > 0 || isSelected ? '1' : '0.72';
+    button.style.opacity = stack || isSelected ? '1' : '0.72';
+    button.title = stackLabel(stack);
   }
 
-  placementHud.textContent = `Selected: ${selectedSlot.label} (${count}) — RMB / long-press to place`;
+  for (let i = 0; i < TOTAL_INVENTORY_SLOTS; i++) {
+    const button = inventoryButtons[i];
+    if (!button) continue;
+    const stack = inventorySlots[i];
+    applyIconStyle(inventoryIcons[i], stack?.block ?? null);
+    inventoryCounts[i].textContent = stack ? String(stack.count) : '';
+
+    const isHotbarSlot = i < HOTBAR_SLOT_COUNT;
+    const isSource = selectedInventoryIndex === i;
+    button.style.border = isSource
+      ? '2px solid #38bdf8'
+      : isHotbarSlot
+      ? '2px solid rgba(250,204,21,0.4)'
+      : '2px solid rgba(255,255,255,0.2)';
+  }
+
+  if (selectedInventoryIndex !== null) {
+    const stack = inventorySlots[selectedInventoryIndex];
+    inventorySelectionInfo.textContent = stack
+      ? `Selected: ${stackLabel(stack)} ×${stack.count}. Tap destination slot.`
+      : 'Tap an item, then tap destination to move.';
+  } else {
+    inventorySelectionInfo.textContent = 'Tap an item, then tap destination to move.';
+  }
+
+  if (!selectedStack) {
+    placementHud.textContent = 'Selected: Empty slot — pick a hotbar item';
+    return;
+  }
+
+  const label = itemVisualByBlock[selectedStack.block]?.label ?? 'Item';
+  placementHud.textContent = `Selected: ${label} (${selectedStack.count}) — RMB / long-press to place`;
 }
+
+backpackButton.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  inventoryOverlay.style.display = 'flex';
+  selectedInventoryIndex = null;
+  refreshPlacementHud();
+});
+
+inventoryCloseButton.addEventListener('click', (event) => {
+  event.preventDefault();
+  inventoryOverlay.style.display = 'none';
+  selectedInventoryIndex = null;
+  refreshPlacementHud();
+});
+
+inventoryOverlay.addEventListener('click', () => {
+  inventoryOverlay.style.display = 'none';
+  selectedInventoryIndex = null;
+  refreshPlacementHud();
+});
 
 refreshPlacementHud();
 
@@ -1026,10 +1320,8 @@ function releaseDroppedItem(item: DroppedItemMesh): void {
   droppedItemPool.set(block, pool);
 }
 
-function addToInventory(block: BlockId, amount = 1): void {
-  const current = placeableInventory[block] ?? 0;
-  placeableInventory[block] = current + amount;
-  refreshPlacementHud();
+function addToInventory(block: BlockId, amount = 1): number {
+  return addItemToInventory(block, amount);
 }
 
 function spawnDroppedItem(block: BlockId, worldX: number, worldY: number, worldZ: number): void {
@@ -1183,8 +1475,8 @@ function isPlacementInsidePlayer(target: PlacementTarget): boolean {
 
 function updatePlacementPreview(clientX: number, clientY: number): void {
   const candidate = getPlacementTargetFromPointer(clientX, clientY);
-  const count = placeableInventory[selectedPlaceBlock] ?? 0;
-  if (!candidate || count <= 0 || isPlacementInsidePlayer(candidate)) {
+  const selectedStack = getSelectedHotbarStack();
+  if (!candidate || !selectedStack || selectedStack.count <= 0 || isPlacementInsidePlayer(candidate)) {
     activePlacementTarget = null;
     placementPreview.visible = false;
     return;
@@ -1200,8 +1492,8 @@ function placeBlockAtTarget(target: PlacementTarget): boolean {
     return false;
   }
 
-  const count = placeableInventory[selectedPlaceBlock] ?? 0;
-  if (count <= 0) {
+  const selectedStack = getSelectedHotbarStack();
+  if (!selectedStack || selectedStack.count <= 0) {
     return false;
   }
 
@@ -1214,8 +1506,11 @@ function placeBlockAtTarget(target: PlacementTarget): boolean {
     return false;
   }
 
-  targetEntry.record.chunk.set(targetEntry.localX, target.worldY, targetEntry.localZ, selectedPlaceBlock);
-  placeableInventory[selectedPlaceBlock] = count - 1;
+  targetEntry.record.chunk.set(targetEntry.localX, target.worldY, targetEntry.localZ, selectedStack.block);
+  selectedStack.count -= 1;
+  if (selectedStack.count <= 0) {
+    inventorySlots[selectedHotbarIndex] = null;
+  }
   refreshPlacementHud();
 
   const targetChunkX = Math.floor(target.worldX / CHUNK_SIZE);
@@ -1298,9 +1593,8 @@ window.addEventListener('keydown', (event) => {
 
   if (key >= '1' && key <= '5') {
     const slotIndex = Number.parseInt(key, 10) - 1;
-    if (slotIndex >= 0 && slotIndex < hotbarSlots.length) {
+    if (slotIndex >= 0 && slotIndex < HOTBAR_SLOT_COUNT) {
       selectedHotbarIndex = slotIndex;
-      selectedPlaceBlock = hotbarSlots[selectedHotbarIndex].block;
       refreshPlacementHud();
     }
   }
