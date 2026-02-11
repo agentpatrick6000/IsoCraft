@@ -717,19 +717,118 @@ miningFill.style.background = 'linear-gradient(90deg, #fde047, #f59e0b)';
 miningOverlay.appendChild(miningFill);
 app.appendChild(miningOverlay);
 
-const selectedPlaceBlock = BlockId.Dirt;
+let selectedPlaceBlock: BlockId = BlockId.Dirt;
 const placeableInventory: Partial<Record<BlockId, number>> = {
   [BlockId.Dirt]: 48
 };
 
+type HotbarSlot = {
+  block: BlockId;
+  label: string;
+  tile: number;
+  color: string;
+};
+
+const hotbarSlots: HotbarSlot[] = [
+  { block: BlockId.Dirt, label: 'Dirt', tile: 2, color: '#8b5a3c' },
+  { block: BlockId.Grass, label: 'Grass', tile: 0, color: '#3f8f3f' },
+  { block: BlockId.Stone, label: 'Stone', tile: 3, color: '#7b7b84' },
+  { block: BlockId.WoodLog, label: 'Log', tile: 7, color: '#8b6a45' },
+  { block: BlockId.Sand, label: 'Sand', tile: 4, color: '#d8c070' }
+];
+
+let selectedHotbarIndex = 0;
+
+const hotbarRoot = document.createElement('div');
+hotbarRoot.style.position = 'fixed';
+hotbarRoot.style.left = '50%';
+hotbarRoot.style.bottom = '16px';
+hotbarRoot.style.transform = 'translateX(-50%)';
+hotbarRoot.style.display = 'flex';
+hotbarRoot.style.gap = '8px';
+hotbarRoot.style.padding = '8px 10px';
+hotbarRoot.style.borderRadius = '14px';
+hotbarRoot.style.background = 'rgba(8,10,14,0.62)';
+hotbarRoot.style.border = '1px solid rgba(255,255,255,0.2)';
+hotbarRoot.style.backdropFilter = 'blur(1px)';
+hotbarRoot.style.zIndex = '26';
+hotbarRoot.style.pointerEvents = 'none';
+app.appendChild(hotbarRoot);
+
+const hotbarButtons: HTMLButtonElement[] = [];
+const hotbarCounts: HTMLSpanElement[] = [];
+
+for (let index = 0; index < hotbarSlots.length; index++) {
+  const slot = hotbarSlots[index];
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.title = slot.label;
+  button.ariaLabel = `${slot.label} slot`;
+  button.style.width = '52px';
+  button.style.height = '52px';
+  button.style.borderRadius = '10px';
+  button.style.border = '2px solid rgba(255,255,255,0.2)';
+  button.style.background = 'rgba(0,0,0,0.58)';
+  button.style.position = 'relative';
+  button.style.pointerEvents = 'auto';
+  button.style.touchAction = 'manipulation';
+  button.style.padding = '0';
+
+  const icon = document.createElement('div');
+  icon.style.position = 'absolute';
+  icon.style.left = '7px';
+  icon.style.top = '7px';
+  icon.style.width = '28px';
+  icon.style.height = '28px';
+  icon.style.borderRadius = '6px';
+  icon.style.imageRendering = 'pixelated';
+  icon.style.backgroundColor = slot.color;
+  icon.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.15)';
+  icon.style.backgroundImage = "url('/textures/atlas.png')";
+  icon.style.backgroundRepeat = 'no-repeat';
+  icon.style.backgroundSize = '64px 64px';
+  const tileX = (slot.tile % 4) * 16;
+  const tileY = Math.floor(slot.tile / 4) * 16;
+  icon.style.backgroundPosition = `-${tileX}px -${tileY}px`;
+
+  const count = document.createElement('span');
+  count.style.position = 'absolute';
+  count.style.right = '5px';
+  count.style.bottom = '4px';
+  count.style.color = '#fff';
+  count.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+  count.style.fontSize = '13px';
+  count.style.fontWeight = '700';
+  count.style.textShadow = '0 1px 2px rgba(0,0,0,0.9)';
+  count.textContent = '0';
+
+  button.append(icon, count);
+
+  const selectSlot = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedHotbarIndex = index;
+    selectedPlaceBlock = hotbarSlots[selectedHotbarIndex].block;
+    refreshPlacementHud();
+  };
+
+  button.addEventListener('click', selectSlot);
+  button.addEventListener('touchstart', selectSlot, { passive: false });
+
+  hotbarButtons.push(button);
+  hotbarCounts.push(count);
+  hotbarRoot.appendChild(button);
+}
+
 const placementHud = document.createElement('div');
 placementHud.style.position = 'fixed';
-placementHud.style.right = '10px';
-placementHud.style.bottom = '14px';
-placementHud.style.padding = '6px 10px';
+placementHud.style.left = '50%';
+placementHud.style.bottom = '84px';
+placementHud.style.transform = 'translateX(-50%)';
+placementHud.style.padding = '5px 10px';
 placementHud.style.borderRadius = '8px';
-placementHud.style.background = 'rgba(0,0,0,0.55)';
-placementHud.style.border = '1px solid rgba(255,255,255,0.35)';
+placementHud.style.background = 'rgba(0,0,0,0.48)';
+placementHud.style.border = '1px solid rgba(255,255,255,0.3)';
 placementHud.style.color = '#fff';
 placementHud.style.fontFamily = 'system-ui, sans-serif';
 placementHud.style.fontSize = '12px';
@@ -748,8 +847,22 @@ scene.add(placementPreview);
 let activePlacementTarget: PlacementTarget | null = null;
 
 function refreshPlacementHud(): void {
-  const count = placeableInventory[selectedPlaceBlock] ?? 0;
-  placementHud.textContent = `Place Dirt: ${count} (RMB / long-press)`;
+  const selectedSlot = hotbarSlots[selectedHotbarIndex];
+  const count = placeableInventory[selectedSlot.block] ?? 0;
+
+  for (let i = 0; i < hotbarSlots.length; i++) {
+    const slot = hotbarSlots[i];
+    const button = hotbarButtons[i];
+    const slotCount = placeableInventory[slot.block] ?? 0;
+    hotbarCounts[i].textContent = String(slotCount);
+
+    const isSelected = i === selectedHotbarIndex;
+    button.style.border = isSelected ? '2px solid #facc15' : '2px solid rgba(255,255,255,0.2)';
+    button.style.boxShadow = isSelected ? '0 0 0 1px rgba(250,204,21,0.35)' : 'none';
+    button.style.opacity = slotCount > 0 || isSelected ? '1' : '0.72';
+  }
+
+  placementHud.textContent = `Selected: ${selectedSlot.label} (${count}) — RMB / long-press to place`;
 }
 
 refreshPlacementHud();
@@ -916,9 +1029,7 @@ function releaseDroppedItem(item: DroppedItemMesh): void {
 function addToInventory(block: BlockId, amount = 1): void {
   const current = placeableInventory[block] ?? 0;
   placeableInventory[block] = current + amount;
-  if (block === selectedPlaceBlock) {
-    refreshPlacementHud();
-  }
+  refreshPlacementHud();
 }
 
 function spawnDroppedItem(block: BlockId, worldX: number, worldY: number, worldZ: number): void {
@@ -1182,6 +1293,15 @@ window.addEventListener('keydown', (event) => {
       rotateSnap(-1);
     } else if (key === 'e') {
       rotateSnap(1);
+    }
+  }
+
+  if (key >= '1' && key <= '5') {
+    const slotIndex = Number.parseInt(key, 10) - 1;
+    if (slotIndex >= 0 && slotIndex < hotbarSlots.length) {
+      selectedHotbarIndex = slotIndex;
+      selectedPlaceBlock = hotbarSlots[selectedHotbarIndex].block;
+      refreshPlacementHud();
     }
   }
 
