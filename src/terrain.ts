@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { fbm2d } from './noise';
 import type { BlockFace, FaceTileMap } from './voxel';
 
 export enum BlockId {
@@ -7,7 +8,9 @@ export enum BlockId {
   Dirt = 2,
   Stone = 3,
   Sand = 4,
-  Water = 5
+  Water = 5,
+  WoodLog = 6,
+  Leaves = 7
 }
 
 type MaskCell = {
@@ -78,15 +81,97 @@ export class Chunk {
     }
   }
 
+  addTrees(options: { worldChunkX: number; worldChunkZ: number; chunkSize: number; seed?: number }): void {
+    const { worldChunkX, worldChunkZ, chunkSize, seed = 9571 } = options;
+
+    for (let localX = 2; localX < this.width - 2; localX++) {
+      for (let localZ = 2; localZ < this.depth - 2; localZ++) {
+        const worldX = worldChunkX * chunkSize + localX;
+        const worldZ = worldChunkZ * chunkSize + localZ;
+
+        const treeNoise = fbm2d(worldX * 0.09, worldZ * 0.09, {
+          seed,
+          octaves: 3,
+          lacunarity: 2,
+          gain: 0.5
+        });
+        const placementJitter = hash2d(worldX, worldZ, seed + 101);
+
+        if (treeNoise < 0.64 || placementJitter < 0.72) {
+          continue;
+        }
+
+        const groundY = this.getTopSolidY(localX, localZ);
+        if (this.get(localX, groundY, localZ) !== BlockId.Grass) {
+          continue;
+        }
+
+        const trunkHeight = 3 + Math.floor(hash2d(worldX, worldZ, seed + 202) * 3);
+        if (groundY + trunkHeight + 2 >= this.height) {
+          continue;
+        }
+
+        let trunkBlocked = false;
+        for (let y = 1; y <= trunkHeight + 1; y++) {
+          if (this.get(localX, groundY + y, localZ) !== BlockId.Air) {
+            trunkBlocked = true;
+            break;
+          }
+        }
+        if (trunkBlocked) {
+          continue;
+        }
+
+        for (let y = 1; y <= trunkHeight; y++) {
+          this.set(localX, groundY + y, localZ, BlockId.WoodLog);
+        }
+
+        const canopyCenterY = groundY + trunkHeight;
+        for (let ox = -2; ox <= 2; ox++) {
+          for (let oz = -2; oz <= 2; oz++) {
+            for (let oy = -2; oy <= 2; oy++) {
+              const distance = Math.abs(ox) + Math.abs(oz) + Math.abs(oy) * 0.85;
+              if (distance > 3.55) {
+                continue;
+              }
+
+              const x = localX + ox;
+              const y = canopyCenterY + oy;
+              const z = localZ + oz;
+              if (x < 0 || x >= this.width || y < 0 || y >= this.height || z < 0 || z >= this.depth) {
+                continue;
+              }
+
+              if (this.get(x, y, z) !== BlockId.Air) {
+                continue;
+              }
+
+              if (hash2d(worldX + ox, worldZ + oz, seed + y) < 0.12 && !(ox === 0 && oy >= 0 && oz === 0)) {
+                continue;
+              }
+
+              this.set(x, y, z, BlockId.Leaves);
+            }
+          }
+        }
+      }
+    }
+  }
+
   getTopSolidY(x: number, z: number): number {
     for (let y = this.height - 1; y >= 0; y--) {
       const block = this.get(x, y, z);
-      if (block !== BlockId.Air && block !== BlockId.Water) {
+      if (block !== BlockId.Air && block !== BlockId.Water && block !== BlockId.Leaves) {
         return y;
       }
     }
     return 0;
   }
+}
+
+function hash2d(x: number, z: number, seed: number): number {
+  const s = Math.sin(x * 127.1 + z * 311.7 + seed * 17.23) * 43758.5453123;
+  return s - Math.floor(s);
 }
 
 function tileForFace(block: BlockId, face: BlockFace, tiles: Record<BlockId, FaceTileMap>): number {
@@ -116,8 +201,17 @@ export function buildChunkGreedyGeometry(options: {
   blockTiles: Record<BlockId, FaceTileMap>;
   atlasColumns?: number;
   atlasRows?: number;
+  shouldRender?: (block: BlockId) => boolean;
+  isOpaque?: (block: BlockId) => boolean;
 }): THREE.BufferGeometry {
-  const { chunk, blockTiles, atlasColumns = 4, atlasRows = 4 } = options;
+  const {
+    chunk,
+    blockTiles,
+    atlasColumns = 4,
+    atlasRows = 4,
+    shouldRender = (block) => block !== BlockId.Air,
+    isOpaque = (block) => block !== BlockId.Air
+  } = options;
   const dims = [chunk.width, chunk.height, chunk.depth] as const;
 
   const positions: number[] = [];
@@ -147,13 +241,21 @@ export function buildChunkGreedyGeometry(options: {
           const a = chunk.get(x[0], x[1], x[2]);
           const b = chunk.get(x[0] + q[0], x[1] + q[1], x[2] + q[2]);
 
-          if ((a !== BlockId.Air) === (b !== BlockId.Air)) {
+          const aRender = shouldRender(a);
+          const bRender = shouldRender(b);
+
+          if (aRender === bRender) {
             mask[n++] = null;
             continue;
           }
 
-          const backFace = a === BlockId.Air;
+          const backFace = !aRender && bRender;
           const block = backFace ? b : a;
+          const neighborBlock = backFace ? a : b;
+          if (isOpaque(neighborBlock)) {
+            mask[n++] = null;
+            continue;
+          }
           const face = faceFromAxis(d, backFace);
           const tile = tileForFace(block, face, blockTiles);
           mask[n++] = { tile, backFace };
