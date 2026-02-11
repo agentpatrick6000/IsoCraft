@@ -6,32 +6,67 @@ if (!app) {
 }
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1e293b);
-
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(2, 2, 3);
-camera.lookAt(0, 0, 0);
+scene.background = new THREE.Color(0x87b8de);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.appendChild(renderer.domElement);
 
-const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
-const boxMaterial = new THREE.MeshStandardMaterial({ color: 0x22c55e });
-const cube = new THREE.Mesh(boxGeometry, boxMaterial);
-scene.add(cube);
+const frustumSize = 20;
+const camera = new THREE.OrthographicCamera();
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.7);
-scene.add(ambient);
+const ISO_AZIMUTH = THREE.MathUtils.degToRad(45);
+const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
+const cameraDistance = 24;
 
-const directional = new THREE.DirectionalLight(0xffffff, 1.2);
-directional.position.set(3, 5, 2);
-scene.add(directional);
+function updateCameraProjection(): void {
+  const aspect = window.innerWidth / window.innerHeight;
+  camera.left = (-frustumSize * aspect) / 2;
+  camera.right = (frustumSize * aspect) / 2;
+  camera.top = frustumSize / 2;
+  camera.bottom = -frustumSize / 2;
+  camera.near = 0.1;
+  camera.far = 200;
+  camera.updateProjectionMatrix();
+}
+
+const target = new THREE.Vector3(0, 0, 0);
+const spherical = new THREE.Spherical(cameraDistance, Math.PI / 2 - ISO_ELEVATION, ISO_AZIMUTH);
+const cameraOffset = new THREE.Vector3().setFromSpherical(spherical);
+camera.position.copy(target).add(cameraOffset);
+camera.lookAt(target);
+updateCameraProjection();
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+const sun = new THREE.DirectionalLight(0xffffff, 1.15);
+sun.position.set(20, 28, 14);
+sun.target.position.set(0, 0, 0);
+scene.add(sun);
+scene.add(sun.target);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(64, 64, 1, 1),
+  new THREE.MeshStandardMaterial({ color: 0x3fa34d, roughness: 1 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = false;
+scene.add(ground);
+
+const grid = new THREE.GridHelper(64, 64, 0x1f2937, 0x475569);
+grid.position.y = 0.01;
+scene.add(grid);
+
+const originMarker = new THREE.Mesh(
+  new THREE.BoxGeometry(1, 0.2, 1),
+  new THREE.MeshStandardMaterial({ color: 0xeab308 })
+);
+originMarker.position.y = 0.1;
+scene.add(originMarker);
 
 function animate(): void {
-  cube.rotation.x += 0.01;
-  cube.rotation.y += 0.015;
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
@@ -39,7 +74,6 @@ function animate(): void {
 animate();
 
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  updateCameraProjection();
 });
