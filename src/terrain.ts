@@ -5,7 +5,9 @@ export enum BlockId {
   Air = 0,
   Grass = 1,
   Dirt = 2,
-  Stone = 3
+  Stone = 3,
+  Sand = 4,
+  Water = 5
 }
 
 type MaskCell = {
@@ -45,21 +47,45 @@ export class Chunk {
   }
 
   fillFlatLayers(surfaceY = 3): void {
-    const dirtStart = Math.max(1, surfaceY - 2);
+    this.fillFromHeightSampler(() => surfaceY, Math.max(0, surfaceY - 1));
+  }
+
+  fillFromHeightSampler(sampleSurfaceY: (x: number, z: number) => number, seaLevel: number): void {
+    this.blocks.fill(BlockId.Air);
 
     for (let x = 0; x < this.width; x++) {
       for (let z = 0; z < this.depth; z++) {
+        const rawSurface = sampleSurfaceY(x, z);
+        const surfaceY = THREE.MathUtils.clamp(Math.floor(rawSurface), 0, this.height - 1);
+        const dirtStart = Math.max(1, surfaceY - 2);
+
         for (let y = 0; y <= surfaceY; y++) {
           if (y === surfaceY) {
-            this.set(x, y, z, BlockId.Grass);
+            const topBlock = surfaceY <= seaLevel ? BlockId.Sand : BlockId.Grass;
+            this.set(x, y, z, topBlock);
           } else if (y >= dirtStart) {
             this.set(x, y, z, BlockId.Dirt);
           } else {
             this.set(x, y, z, BlockId.Stone);
           }
         }
+
+        const waterMaxY = Math.min(seaLevel, this.height - 1);
+        for (let y = surfaceY + 1; y <= waterMaxY; y++) {
+          this.set(x, y, z, BlockId.Water);
+        }
       }
     }
+  }
+
+  getTopSolidY(x: number, z: number): number {
+    for (let y = this.height - 1; y >= 0; y--) {
+      const block = this.get(x, y, z);
+      if (block !== BlockId.Air && block !== BlockId.Water) {
+        return y;
+      }
+    }
+    return 0;
   }
 }
 
@@ -82,12 +108,7 @@ function pushUv(uvs: number[], tile: number, atlasCols: number, atlasRows: numbe
   const u1 = (tileX + 1) / atlasCols;
   const v1 = 1 - (tileY + 1) / atlasRows;
 
-  uvs.push(
-    u1, v0,
-    u0, v0,
-    u1, v1,
-    u0, v1
-  );
+  uvs.push(u1, v0, u0, v0, u1, v1, u0, v1);
 }
 
 export function buildChunkGreedyGeometry(options: {

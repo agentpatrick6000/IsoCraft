@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FaceTileMap } from './voxel';
+import { fbm2d } from './noise';
 import { BlockId, Chunk, buildChunkGreedyGeometry } from './terrain';
 
 const app = document.getElementById('app');
@@ -55,6 +56,34 @@ const stoneTiles: FaceTileMap = {
   west: 3
 };
 
+const sandTiles: FaceTileMap = {
+  top: 4,
+  bottom: 4,
+  north: 4,
+  south: 4,
+  east: 4,
+  west: 4
+};
+
+const waterTiles: FaceTileMap = {
+  top: 5,
+  bottom: 5,
+  north: 5,
+  south: 5,
+  east: 5,
+  west: 5
+};
+
+const WORLD_CHUNK_RADIUS = 2;
+const CHUNK_SIZE = 16;
+const CHUNK_HEIGHT = 12;
+const SEA_LEVEL = 4;
+const BASE_HEIGHT = 5;
+const HEIGHT_AMPLITUDE = 3;
+const HEIGHT_NOISE_SCALE = 0.05;
+
+let playerSpawnY = 6;
+
 textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   atlasTexture.magFilter = THREE.NearestFilter;
   atlasTexture.minFilter = THREE.NearestFilter;
@@ -63,30 +92,57 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
 
-  const chunk = new Chunk(16, 8, 16);
-  chunk.fillFlatLayers(3);
-
-  const geometry = buildChunkGreedyGeometry({
-    chunk,
-    blockTiles: {
-      [BlockId.Air]: grassTiles,
-      [BlockId.Grass]: grassTiles,
-      [BlockId.Dirt]: dirtTiles,
-      [BlockId.Stone]: stoneTiles
-    }
-  });
-
   const material = new THREE.MeshStandardMaterial({ map: atlasTexture });
-  const chunkMesh = new THREE.Mesh(geometry, material);
-  chunkMesh.position.set(-8, 0, -8);
-  worldRoot.add(chunkMesh);
+
+  for (let chunkX = -WORLD_CHUNK_RADIUS; chunkX <= WORLD_CHUNK_RADIUS; chunkX++) {
+    for (let chunkZ = -WORLD_CHUNK_RADIUS; chunkZ <= WORLD_CHUNK_RADIUS; chunkZ++) {
+      const chunk = new Chunk(CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
+
+      chunk.fillFromHeightSampler((localX, localZ) => {
+        const worldX = chunkX * CHUNK_SIZE + localX;
+        const worldZ = chunkZ * CHUNK_SIZE + localZ;
+        const noiseValue = fbm2d(worldX * HEIGHT_NOISE_SCALE, worldZ * HEIGHT_NOISE_SCALE, {
+          seed: 4242,
+          octaves: 5,
+          lacunarity: 2,
+          gain: 0.5
+        });
+
+        return BASE_HEIGHT + Math.round((noiseValue - 0.5) * HEIGHT_AMPLITUDE * 2);
+      }, SEA_LEVEL);
+
+      const geometry = buildChunkGreedyGeometry({
+        chunk,
+        blockTiles: {
+          [BlockId.Air]: grassTiles,
+          [BlockId.Grass]: grassTiles,
+          [BlockId.Dirt]: dirtTiles,
+          [BlockId.Stone]: stoneTiles,
+          [BlockId.Sand]: sandTiles,
+          [BlockId.Water]: waterTiles
+        }
+      });
+
+      const chunkMesh = new THREE.Mesh(geometry, material);
+      chunkMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
+      worldRoot.add(chunkMesh);
+
+      if (chunkX === 0 && chunkZ === 0) {
+        playerSpawnY = chunk.getTopSolidY(Math.floor(CHUNK_SIZE / 2), Math.floor(CHUNK_SIZE / 2)) + 1.1;
+      }
+    }
+  }
+
+  const worldWidth = (WORLD_CHUNK_RADIUS * 2 + 1) * CHUNK_SIZE;
+  worldRoot.position.set(-worldWidth / 2, 0, -worldWidth / 2);
+  player.position.y = playerSpawnY;
 });
 
 const player = new THREE.Mesh(
   new THREE.BoxGeometry(1, 0.2, 1),
   new THREE.MeshStandardMaterial({ color: 0xeab308 })
 );
-player.position.set(0, 4.1, 0);
+player.position.set(0, playerSpawnY, 0);
 scene.add(player);
 
 const followOffset = new THREE.Vector3();
