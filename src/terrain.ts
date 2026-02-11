@@ -13,7 +13,16 @@ export enum BlockId {
   Leaves = 7,
   CoalOre = 8,
   IronOre = 9,
-  GoldOre = 10
+  GoldOre = 10,
+  Planks = 11,
+  Sticks = 12,
+  CraftingTable = 13,
+  WoodenPickaxe = 14,
+  WoodenAxe = 15,
+  WoodenShovel = 16,
+  Furnace = 17,
+  StonePickaxe = 18,
+  Torch = 19
 }
 
 type MaskCell = {

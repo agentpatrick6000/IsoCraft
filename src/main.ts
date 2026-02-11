@@ -140,6 +140,42 @@ const goldOreTiles: FaceTileMap = {
   west: 11
 };
 
+const planksTiles: FaceTileMap = {
+  top: 12,
+  bottom: 12,
+  north: 12,
+  south: 12,
+  east: 12,
+  west: 12
+};
+
+const sticksTiles: FaceTileMap = {
+  top: 13,
+  bottom: 13,
+  north: 13,
+  south: 13,
+  east: 13,
+  west: 13
+};
+
+const craftingTableTiles: FaceTileMap = {
+  top: 14,
+  bottom: 12,
+  north: 14,
+  south: 14,
+  east: 14,
+  west: 14
+};
+
+const toolTiles: FaceTileMap = {
+  top: 15,
+  bottom: 15,
+  north: 15,
+  south: 15,
+  east: 15,
+  west: 15
+};
+
 const blockTilesById: Record<BlockId, FaceTileMap> = {
   [BlockId.Air]: grassTiles,
   [BlockId.Grass]: grassTiles,
@@ -151,7 +187,16 @@ const blockTilesById: Record<BlockId, FaceTileMap> = {
   [BlockId.Leaves]: leavesTiles,
   [BlockId.CoalOre]: coalOreTiles,
   [BlockId.IronOre]: ironOreTiles,
-  [BlockId.GoldOre]: goldOreTiles
+  [BlockId.GoldOre]: goldOreTiles,
+  [BlockId.Planks]: planksTiles,
+  [BlockId.Sticks]: sticksTiles,
+  [BlockId.CraftingTable]: craftingTableTiles,
+  [BlockId.WoodenPickaxe]: toolTiles,
+  [BlockId.WoodenAxe]: toolTiles,
+  [BlockId.WoodenShovel]: toolTiles,
+  [BlockId.Furnace]: stoneTiles,
+  [BlockId.StonePickaxe]: toolTiles,
+  [BlockId.Torch]: toolTiles
 };
 
 const WORLD_CHUNK_RADIUS = 2;
@@ -734,13 +779,22 @@ type ItemVisual = {
 const itemVisualByBlock: Partial<Record<BlockId, ItemVisual>> = {
   [BlockId.Grass]: { label: 'Grass', tile: 0, color: '#3f8f3f' },
   [BlockId.Dirt]: { label: 'Dirt', tile: 2, color: '#8b5a3c' },
-  [BlockId.Stone]: { label: 'Stone', tile: 3, color: '#7b7b84' },
+  [BlockId.Stone]: { label: 'Cobblestone', tile: 3, color: '#7b7b84' },
   [BlockId.Sand]: { label: 'Sand', tile: 4, color: '#d8c070' },
-  [BlockId.WoodLog]: { label: 'Log', tile: 7, color: '#8b6a45' },
+  [BlockId.WoodLog]: { label: 'Wood Log', tile: 7, color: '#8b6a45' },
   [BlockId.Leaves]: { label: 'Leaves', tile: 8, color: '#58a158' },
-  [BlockId.CoalOre]: { label: 'Coal Ore', tile: 9, color: '#50505a' },
+  [BlockId.CoalOre]: { label: 'Coal', tile: 9, color: '#50505a' },
   [BlockId.IronOre]: { label: 'Iron Ore', tile: 10, color: '#b7936a' },
-  [BlockId.GoldOre]: { label: 'Gold Ore', tile: 11, color: '#f7c845' }
+  [BlockId.GoldOre]: { label: 'Gold Ore', tile: 11, color: '#f7c845' },
+  [BlockId.Planks]: { label: 'Planks', tile: 12, color: '#b28a5d' },
+  [BlockId.Sticks]: { label: 'Stick', tile: 13, color: '#c09b6f' },
+  [BlockId.CraftingTable]: { label: 'Crafting Table', tile: 14, color: '#9f7d56' },
+  [BlockId.WoodenPickaxe]: { label: 'Wooden Pickaxe', tile: 15, color: '#c89d62' },
+  [BlockId.WoodenAxe]: { label: 'Wooden Axe', tile: 15, color: '#c0894f' },
+  [BlockId.WoodenShovel]: { label: 'Wooden Shovel', tile: 15, color: '#d6aa72' },
+  [BlockId.Furnace]: { label: 'Furnace', tile: 3, color: '#6f727d' },
+  [BlockId.StonePickaxe]: { label: 'Stone Pickaxe', tile: 15, color: '#a0a8b8' },
+  [BlockId.Torch]: { label: 'Torch', tile: 15, color: '#f5cd4d' }
 };
 
 const HOTBAR_SLOT_COUNT = 5;
@@ -1240,37 +1294,102 @@ inventoryOverlay.addEventListener('click', () => {
 
 type CraftCategory = 'All' | 'Tools' | 'Building' | 'Materials';
 type CraftIngredient = { block: BlockId; count: number };
+type CraftRecipeStation = 'hand' | 'table';
 type CraftRecipe = {
   id: string;
   name: string;
   category: Exclude<CraftCategory, 'All'>;
+  station: CraftRecipeStation;
   output: { block: BlockId; count: number };
   inputs: CraftIngredient[];
 };
 
 const craftRecipes: CraftRecipe[] = [
   {
-    id: 'leaf-mulch',
-    name: 'Leaf Mulch',
+    id: 'planks-from-log',
+    name: 'Wood Planks',
     category: 'Materials',
-    output: { block: BlockId.Dirt, count: 1 },
-    inputs: [{ block: BlockId.Leaves, count: 3 }]
+    station: 'hand',
+    output: { block: BlockId.Planks, count: 4 },
+    inputs: [{ block: BlockId.WoodLog, count: 1 }]
   },
   {
-    id: 'stone-pack',
-    name: 'Stone Pack',
+    id: 'sticks-from-planks',
+    name: 'Sticks',
+    category: 'Materials',
+    station: 'hand',
+    output: { block: BlockId.Sticks, count: 4 },
+    inputs: [{ block: BlockId.Planks, count: 2 }]
+  },
+  {
+    id: 'crafting-table',
+    name: 'Crafting Table',
     category: 'Building',
-    output: { block: BlockId.Stone, count: 1 },
-    inputs: [{ block: BlockId.Dirt, count: 4 }]
+    station: 'hand',
+    output: { block: BlockId.CraftingTable, count: 1 },
+    inputs: [{ block: BlockId.Planks, count: 4 }]
   },
   {
-    id: 'charcoal-mix',
-    name: 'Charcoal Mix',
+    id: 'wooden-pickaxe',
+    name: 'Wooden Pickaxe',
     category: 'Tools',
-    output: { block: BlockId.CoalOre, count: 1 },
+    station: 'table',
+    output: { block: BlockId.WoodenPickaxe, count: 1 },
     inputs: [
-      { block: BlockId.WoodLog, count: 2 },
-      { block: BlockId.Leaves, count: 2 }
+      { block: BlockId.Planks, count: 3 },
+      { block: BlockId.Sticks, count: 2 }
+    ]
+  },
+  {
+    id: 'wooden-axe',
+    name: 'Wooden Axe',
+    category: 'Tools',
+    station: 'table',
+    output: { block: BlockId.WoodenAxe, count: 1 },
+    inputs: [
+      { block: BlockId.Planks, count: 3 },
+      { block: BlockId.Sticks, count: 2 }
+    ]
+  },
+  {
+    id: 'wooden-shovel',
+    name: 'Wooden Shovel',
+    category: 'Tools',
+    station: 'table',
+    output: { block: BlockId.WoodenShovel, count: 1 },
+    inputs: [
+      { block: BlockId.Planks, count: 3 },
+      { block: BlockId.Sticks, count: 2 }
+    ]
+  },
+  {
+    id: 'furnace',
+    name: 'Furnace',
+    category: 'Building',
+    station: 'table',
+    output: { block: BlockId.Furnace, count: 1 },
+    inputs: [{ block: BlockId.Stone, count: 8 }]
+  },
+  {
+    id: 'stone-pickaxe',
+    name: 'Stone Pickaxe',
+    category: 'Tools',
+    station: 'table',
+    output: { block: BlockId.StonePickaxe, count: 1 },
+    inputs: [
+      { block: BlockId.Stone, count: 3 },
+      { block: BlockId.Sticks, count: 2 }
+    ]
+  },
+  {
+    id: 'torch',
+    name: 'Torch',
+    category: 'Building',
+    station: 'hand',
+    output: { block: BlockId.Torch, count: 4 },
+    inputs: [
+      { block: BlockId.CoalOre, count: 1 },
+      { block: BlockId.Sticks, count: 1 }
     ]
   }
 ];
@@ -1339,7 +1458,7 @@ const craftingHint = document.createElement('div');
 craftingHint.style.marginTop = '10px';
 craftingHint.style.opacity = '0.85';
 craftingHint.style.fontSize = '12px';
-craftingHint.textContent = 'Tap recipe to craft 1. Long-press a craftable recipe to craft max.';
+craftingHint.textContent = 'Tap recipe to craft 1. Long-press to craft max. Tool/furnace recipes require a nearby Crafting Table.';
 craftingPanel.appendChild(craftingHint);
 
 function getInventoryCount(block: BlockId): number {
@@ -1372,8 +1491,35 @@ function removeItemFromInventory(block: BlockId, amount: number): boolean {
   return remaining <= 0;
 }
 
+function hasNearbyCraftingTable(range = 3): boolean {
+  const px = Math.floor(playerTerrainPos.x);
+  const py = Math.floor(playerTerrainPos.y - 0.5);
+  const pz = Math.floor(playerTerrainPos.z);
+  const rangeSq = range * range;
+
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dz = -range; dz <= range; dz++) {
+      for (let dx = -range; dx <= range; dx++) {
+        const distSq = dx * dx + dz * dz;
+        if (distSq > rangeSq) continue;
+        const target = getBlockAtWorld(px + dx, py + dy, pz + dz);
+        if (!target) continue;
+        if (target.record.chunk.get(target.localX, py + dy, target.localZ) === BlockId.CraftingTable) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function canUseRecipeStation(recipe: CraftRecipe): boolean {
+  return recipe.station === 'hand' || hasNearbyCraftingTable();
+}
+
 function canCraftRecipe(recipe: CraftRecipe): boolean {
-  return recipe.inputs.every((input) => getInventoryCount(input.block) >= input.count);
+  return canUseRecipeStation(recipe) && recipe.inputs.every((input) => getInventoryCount(input.block) >= input.count);
 }
 
 function craftRecipe(recipe: CraftRecipe, amount: number): number {
@@ -1420,8 +1566,27 @@ function renderCraftingRecipes(): void {
     craftingList.removeChild(craftingList.firstChild);
   }
 
-  const recipes = craftRecipes.filter((recipe) => activeCraftCategory === 'All' || recipe.category === activeCraftCategory);
+  const recipes = craftRecipes.filter((recipe) => {
+    if (activeCraftCategory !== 'All' && recipe.category !== activeCraftCategory) {
+      return false;
+    }
+    return canUseRecipeStation(recipe);
+  });
   const sorted = recipes.sort((a, b) => Number(canCraftRecipe(b)) - Number(canCraftRecipe(a)));
+
+  if (sorted.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.padding = '10px';
+    empty.style.border = '1px solid rgba(255,255,255,0.2)';
+    empty.style.borderRadius = '10px';
+    empty.style.opacity = '0.85';
+    empty.style.fontSize = '12px';
+    empty.textContent = activeCraftCategory === 'Tools'
+      ? 'No tool recipes available here. Place and stand near a Crafting Table.'
+      : 'No recipes available with the current station/category.';
+    craftingList.appendChild(empty);
+    return;
+  }
 
   for (const recipe of sorted) {
     const available = canCraftRecipe(recipe);
@@ -1452,7 +1617,7 @@ function renderCraftingRecipes(): void {
     metaLine.style.fontSize = '11px';
     metaLine.style.marginTop = '4px';
     metaLine.style.opacity = '0.8';
-    metaLine.textContent = `Category: ${recipe.category}`;
+    metaLine.textContent = `Category: ${recipe.category} • Station: ${recipe.station === 'table' ? 'Crafting Table' : 'Hand'}`;
 
     recipeButton.append(outputLine, inputLine, metaLine);
 
