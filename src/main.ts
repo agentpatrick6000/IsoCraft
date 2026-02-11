@@ -866,6 +866,21 @@ backpackButton.style.pointerEvents = 'auto';
 backpackButton.style.touchAction = 'manipulation';
 hotbarRoot.appendChild(backpackButton);
 
+const craftButton = document.createElement('button');
+craftButton.type = 'button';
+craftButton.textContent = '🛠️';
+craftButton.title = 'Crafting';
+craftButton.style.width = '44px';
+craftButton.style.height = '44px';
+craftButton.style.borderRadius = '10px';
+craftButton.style.border = '2px solid rgba(255,255,255,0.2)';
+craftButton.style.background = 'rgba(0,0,0,0.58)';
+craftButton.style.color = '#fff';
+craftButton.style.fontSize = '20px';
+craftButton.style.pointerEvents = 'auto';
+craftButton.style.touchAction = 'manipulation';
+hotbarRoot.appendChild(craftButton);
+
 const inventoryOverlay = document.createElement('div');
 inventoryOverlay.style.position = 'fixed';
 inventoryOverlay.style.inset = '0';
@@ -1042,6 +1057,23 @@ function updateHeldItemVisual(): void {
   player.add(heldItemMesh);
 }
 
+function canAddItemToInventory(block: BlockId, amount = 1): boolean {
+  let capacity = 0;
+  for (let i = 0; i < TOTAL_INVENTORY_SLOTS; i++) {
+    const slot = inventorySlots[i];
+    if (!slot) {
+      capacity += INVENTORY_STACK_LIMIT;
+    } else if (slot.block === block) {
+      capacity += INVENTORY_STACK_LIMIT - slot.count;
+    }
+    if (capacity >= amount) {
+      return true;
+    }
+  }
+
+  return capacity >= amount;
+}
+
 function addItemToInventory(block: BlockId, amount = 1): number {
   let remaining = amount;
 
@@ -1203,6 +1235,315 @@ inventoryCloseButton.addEventListener('click', (event) => {
 inventoryOverlay.addEventListener('click', () => {
   inventoryOverlay.style.display = 'none';
   selectedInventoryIndex = null;
+  refreshPlacementHud();
+});
+
+type CraftCategory = 'All' | 'Tools' | 'Building' | 'Materials';
+type CraftIngredient = { block: BlockId; count: number };
+type CraftRecipe = {
+  id: string;
+  name: string;
+  category: Exclude<CraftCategory, 'All'>;
+  output: { block: BlockId; count: number };
+  inputs: CraftIngredient[];
+};
+
+const craftRecipes: CraftRecipe[] = [
+  {
+    id: 'leaf-mulch',
+    name: 'Leaf Mulch',
+    category: 'Materials',
+    output: { block: BlockId.Dirt, count: 1 },
+    inputs: [{ block: BlockId.Leaves, count: 3 }]
+  },
+  {
+    id: 'stone-pack',
+    name: 'Stone Pack',
+    category: 'Building',
+    output: { block: BlockId.Stone, count: 1 },
+    inputs: [{ block: BlockId.Dirt, count: 4 }]
+  },
+  {
+    id: 'charcoal-mix',
+    name: 'Charcoal Mix',
+    category: 'Tools',
+    output: { block: BlockId.CoalOre, count: 1 },
+    inputs: [
+      { block: BlockId.WoodLog, count: 2 },
+      { block: BlockId.Leaves, count: 2 }
+    ]
+  }
+];
+
+let activeCraftCategory: CraftCategory = 'All';
+const craftingOverlay = document.createElement('div');
+craftingOverlay.style.position = 'fixed';
+craftingOverlay.style.inset = '0';
+craftingOverlay.style.background = 'rgba(0,0,0,0.62)';
+craftingOverlay.style.display = 'none';
+craftingOverlay.style.alignItems = 'center';
+craftingOverlay.style.justifyContent = 'center';
+craftingOverlay.style.zIndex = '45';
+craftingOverlay.style.pointerEvents = 'auto';
+app.appendChild(craftingOverlay);
+
+const craftingPanel = document.createElement('div');
+craftingPanel.style.width = 'min(92vw, 520px)';
+craftingPanel.style.maxHeight = '84vh';
+craftingPanel.style.display = 'flex';
+craftingPanel.style.flexDirection = 'column';
+craftingPanel.style.background = 'rgba(14,16,22,0.95)';
+craftingPanel.style.border = '1px solid rgba(255,255,255,0.2)';
+craftingPanel.style.borderRadius = '14px';
+craftingPanel.style.padding = '12px';
+craftingPanel.style.color = '#fff';
+craftingPanel.style.fontFamily = 'system-ui, sans-serif';
+craftingPanel.addEventListener('click', (event) => event.stopPropagation());
+craftingOverlay.appendChild(craftingPanel);
+
+const craftingHeader = document.createElement('div');
+craftingHeader.style.display = 'flex';
+craftingHeader.style.justifyContent = 'space-between';
+craftingHeader.style.alignItems = 'center';
+craftingHeader.style.marginBottom = '10px';
+
+const craftingTitle = document.createElement('strong');
+craftingTitle.textContent = 'Crafting';
+const craftingCloseButton = document.createElement('button');
+craftingCloseButton.type = 'button';
+craftingCloseButton.textContent = 'Close';
+craftingCloseButton.style.borderRadius = '8px';
+craftingCloseButton.style.border = '1px solid rgba(255,255,255,0.25)';
+craftingCloseButton.style.background = 'rgba(255,255,255,0.08)';
+craftingCloseButton.style.color = '#fff';
+craftingCloseButton.style.padding = '5px 10px';
+craftingHeader.append(craftingTitle, craftingCloseButton);
+craftingPanel.appendChild(craftingHeader);
+
+const craftingCategoryRow = document.createElement('div');
+craftingCategoryRow.style.display = 'flex';
+craftingCategoryRow.style.gap = '6px';
+craftingCategoryRow.style.flexWrap = 'wrap';
+craftingCategoryRow.style.marginBottom = '10px';
+craftingPanel.appendChild(craftingCategoryRow);
+
+const craftingList = document.createElement('div');
+craftingList.style.overflowY = 'auto';
+craftingList.style.maxHeight = '58vh';
+craftingList.style.display = 'flex';
+craftingList.style.flexDirection = 'column';
+craftingList.style.gap = '8px';
+craftingPanel.appendChild(craftingList);
+
+const craftingHint = document.createElement('div');
+craftingHint.style.marginTop = '10px';
+craftingHint.style.opacity = '0.85';
+craftingHint.style.fontSize = '12px';
+craftingHint.textContent = 'Tap recipe to craft 1. Long-press a craftable recipe to craft max.';
+craftingPanel.appendChild(craftingHint);
+
+function getInventoryCount(block: BlockId): number {
+  let total = 0;
+  for (const slot of inventorySlots) {
+    if (slot?.block === block) {
+      total += slot.count;
+    }
+  }
+  return total;
+}
+
+function removeItemFromInventory(block: BlockId, amount: number): boolean {
+  if (getInventoryCount(block) < amount) {
+    return false;
+  }
+
+  let remaining = amount;
+  for (let i = 0; i < TOTAL_INVENTORY_SLOTS && remaining > 0; i++) {
+    const slot = inventorySlots[i];
+    if (!slot || slot.block !== block) continue;
+    const take = Math.min(slot.count, remaining);
+    slot.count -= take;
+    remaining -= take;
+    if (slot.count <= 0) {
+      inventorySlots[i] = null;
+    }
+  }
+
+  return remaining <= 0;
+}
+
+function canCraftRecipe(recipe: CraftRecipe): boolean {
+  return recipe.inputs.every((input) => getInventoryCount(input.block) >= input.count);
+}
+
+function craftRecipe(recipe: CraftRecipe, amount: number): number {
+  let crafted = 0;
+  for (let i = 0; i < amount; i++) {
+    if (!canCraftRecipe(recipe)) break;
+    if (!canAddItemToInventory(recipe.output.block, recipe.output.count)) break;
+
+    let consumedAll = true;
+    for (const input of recipe.inputs) {
+      if (!removeItemFromInventory(input.block, input.count)) {
+        consumedAll = false;
+        break;
+      }
+    }
+
+    if (!consumedAll) break;
+    addItemToInventory(recipe.output.block, recipe.output.count);
+    crafted += 1;
+  }
+
+  if (crafted > 0) {
+    refreshPlacementHud();
+    renderCraftingRecipes();
+  }
+
+  return crafted;
+}
+
+function maxCraftableCount(recipe: CraftRecipe): number {
+  let max = Number.POSITIVE_INFINITY;
+  for (const input of recipe.inputs) {
+    max = Math.min(max, Math.floor(getInventoryCount(input.block) / input.count));
+  }
+  return Number.isFinite(max) ? max : 0;
+}
+
+function itemLabel(block: BlockId): string {
+  return itemVisualByBlock[block]?.label ?? 'Item';
+}
+
+function renderCraftingRecipes(): void {
+  while (craftingList.firstChild) {
+    craftingList.removeChild(craftingList.firstChild);
+  }
+
+  const recipes = craftRecipes.filter((recipe) => activeCraftCategory === 'All' || recipe.category === activeCraftCategory);
+  const sorted = recipes.sort((a, b) => Number(canCraftRecipe(b)) - Number(canCraftRecipe(a)));
+
+  for (const recipe of sorted) {
+    const available = canCraftRecipe(recipe);
+    const recipeButton = document.createElement('button');
+    recipeButton.type = 'button';
+    recipeButton.style.width = '100%';
+    recipeButton.style.textAlign = 'left';
+    recipeButton.style.border = available ? '1px solid rgba(134,239,172,0.5)' : '1px solid rgba(255,255,255,0.2)';
+    recipeButton.style.background = available ? 'rgba(34,197,94,0.12)' : 'rgba(0,0,0,0.25)';
+    recipeButton.style.borderRadius = '10px';
+    recipeButton.style.padding = '10px';
+    recipeButton.style.color = '#fff';
+    recipeButton.style.opacity = available ? '1' : '0.6';
+
+    const outputLine = document.createElement('div');
+    outputLine.style.fontWeight = '700';
+    outputLine.style.marginBottom = '4px';
+    outputLine.textContent = `${itemLabel(recipe.output.block)} ×${recipe.output.count}`;
+
+    const inputLine = document.createElement('div');
+    inputLine.style.fontSize = '12px';
+    inputLine.style.opacity = '0.9';
+    inputLine.textContent = recipe.inputs
+      .map((input) => `${itemLabel(input.block)} ×${input.count} (have ${getInventoryCount(input.block)})`)
+      .join('  •  ');
+
+    const metaLine = document.createElement('div');
+    metaLine.style.fontSize = '11px';
+    metaLine.style.marginTop = '4px';
+    metaLine.style.opacity = '0.8';
+    metaLine.textContent = `Category: ${recipe.category}`;
+
+    recipeButton.append(outputLine, inputLine, metaLine);
+
+    let longPressTimer = 0;
+    let longPressTriggered = false;
+    const clearLongPress = () => {
+      if (longPressTimer) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = 0;
+      }
+    };
+
+    recipeButton.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      if (!canCraftRecipe(recipe)) return;
+      longPressTriggered = false;
+      clearLongPress();
+      longPressTimer = window.setTimeout(() => {
+        longPressTimer = 0;
+        longPressTriggered = true;
+        const maxAmount = maxCraftableCount(recipe);
+        if (maxAmount > 0) {
+          craftRecipe(recipe, maxAmount);
+        }
+      }, 420);
+    });
+
+    recipeButton.addEventListener('pointerup', (event) => {
+      event.preventDefault();
+      if (!canCraftRecipe(recipe)) {
+        clearLongPress();
+        return;
+      }
+
+      clearLongPress();
+      if (!longPressTriggered) {
+        craftRecipe(recipe, 1);
+      }
+    });
+
+    recipeButton.addEventListener('pointerleave', clearLongPress);
+    recipeButton.addEventListener('pointercancel', clearLongPress);
+
+    craftingList.appendChild(recipeButton);
+  }
+}
+
+function renderCraftCategories(): void {
+  while (craftingCategoryRow.firstChild) {
+    craftingCategoryRow.removeChild(craftingCategoryRow.firstChild);
+  }
+
+  const categories: CraftCategory[] = ['All', 'Tools', 'Building', 'Materials'];
+  for (const category of categories) {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.textContent = category;
+    tab.style.borderRadius = '999px';
+    tab.style.border = category === activeCraftCategory ? '1px solid rgba(250,204,21,0.7)' : '1px solid rgba(255,255,255,0.25)';
+    tab.style.background = category === activeCraftCategory ? 'rgba(250,204,21,0.2)' : 'rgba(255,255,255,0.06)';
+    tab.style.color = '#fff';
+    tab.style.padding = '4px 10px';
+    tab.style.fontSize = '12px';
+    tab.addEventListener('click', () => {
+      activeCraftCategory = category;
+      renderCraftCategories();
+      renderCraftingRecipes();
+    });
+    craftingCategoryRow.appendChild(tab);
+  }
+}
+
+craftButton.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  inventoryOverlay.style.display = 'none';
+  selectedInventoryIndex = null;
+  craftingOverlay.style.display = 'flex';
+  renderCraftCategories();
+  renderCraftingRecipes();
+  refreshPlacementHud();
+});
+
+craftingCloseButton.addEventListener('click', (event) => {
+  event.preventDefault();
+  craftingOverlay.style.display = 'none';
+  refreshPlacementHud();
+});
+
+craftingOverlay.addEventListener('click', () => {
+  craftingOverlay.style.display = 'none';
   refreshPlacementHud();
 });
 
