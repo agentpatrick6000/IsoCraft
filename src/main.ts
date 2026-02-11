@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import Stats from 'three/addons/libs/stats.module.js';
-import type { FaceTileMap } from './voxel';
+import { createVoxelBlockMesh, type FaceTileMap } from './voxel';
 import { fbm2d } from './noise';
 import { BlockId, Chunk, buildChunkGreedyGeometry } from './terrain';
 
@@ -46,6 +46,7 @@ let currentFrustumSize: number = ZOOM_LEVELS[zoomLevel];
 let desiredFrustumSize: number = currentFrustumSize;
 
 const textureLoader = new THREE.TextureLoader();
+let worldAtlasTexture: THREE.Texture | null = null;
 const worldRoot = new THREE.Group();
 scene.add(worldRoot);
 
@@ -498,6 +499,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
 
   atlasTexture.magFilter = THREE.NearestFilter;
   atlasTexture.minFilter = THREE.NearestFilter;
+  worldAtlasTexture = atlasTexture;
   atlasTexture.generateMipmaps = false;
   atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
   atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
@@ -756,7 +758,16 @@ let activeMiningTarget: MiningTarget | null = null;
 let miningStartMs = 0;
 let miningDurationMs = 0;
 let miningGhost: THREE.Mesh | null = null;
-const droppedItems: THREE.Mesh[] = [];
+type DroppedItemMesh = THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial> & {
+  userData: {
+    spawnMs: number;
+    baseY: number;
+    block: BlockId;
+  };
+};
+const droppedItems: DroppedItemMesh[] = [];
+const droppedItemPool = new Map<BlockId, DroppedItemMesh[]>();
+const PICKUP_RADIUS = 1.5;
 
 function screenToNdc(clientX: number, clientY: number): void {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -869,26 +880,57 @@ function startMining(target: MiningTarget): void {
   miningFill.style.width = '0%';
 }
 
-function spawnDroppedItem(block: BlockId, worldX: number, worldY: number, worldZ: number): void {
-  const colorMap: Partial<Record<BlockId, number>> = {
-    [BlockId.Grass]: 0x4ade80,
-    [BlockId.Dirt]: 0x8b5a2b,
-    [BlockId.Stone]: 0x9ca3af,
-    [BlockId.Sand]: 0xfde68a,
-    [BlockId.WoodLog]: 0x8b5a2b,
-    [BlockId.Leaves]: 0x22c55e,
-    [BlockId.CoalOre]: 0x4b5563,
-    [BlockId.IronOre]: 0xc08457,
-    [BlockId.GoldOre]: 0xfacc15
-  };
+function acquireDroppedItem(block: BlockId): DroppedItemMesh | null {
+  const pool = droppedItemPool.get(block);
+  const reused = pool?.pop();
+  if (reused) {
+    reused.visible = true;
+    return reused;
+  }
 
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.35, 0.35, 0.35),
-    new THREE.MeshStandardMaterial({ color: colorMap[block] ?? 0xffffff, roughness: 0.6, metalness: 0.05 })
-  );
+  if (!worldAtlasTexture) {
+    return null;
+  }
+
+  const mesh = createVoxelBlockMesh({
+    atlasTexture: worldAtlasTexture,
+    tiles: blockTilesById[block],
+    atlasColumns: 4,
+    atlasRows: 4,
+    size: 0.35
+  }) as DroppedItemMesh;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  return mesh;
+}
+
+function releaseDroppedItem(item: DroppedItemMesh): void {
+  scene.remove(item);
+  item.visible = false;
+  const block = item.userData.block;
+  const pool = droppedItemPool.get(block) ?? [];
+  pool.push(item);
+  droppedItemPool.set(block, pool);
+}
+
+function addToInventory(block: BlockId, amount = 1): void {
+  const current = placeableInventory[block] ?? 0;
+  placeableInventory[block] = current + amount;
+  if (block === selectedPlaceBlock) {
+    refreshPlacementHud();
+  }
+}
+
+function spawnDroppedItem(block: BlockId, worldX: number, worldY: number, worldZ: number): void {
+  const mesh = acquireDroppedItem(block);
+  if (!mesh) {
+    return;
+  }
+
   mesh.position.set(terrainToSceneX(worldX + 0.5), worldY + 0.45, terrainToSceneZ(worldZ + 0.5));
   mesh.userData.spawnMs = performance.now();
   mesh.userData.baseY = worldY + 0.45;
+  mesh.userData.block = block;
   scene.add(mesh);
   droppedItems.push(mesh);
 }
@@ -1505,16 +1547,28 @@ function animate(timeMs: number): void {
 
   for (let i = droppedItems.length - 1; i >= 0; i--) {
     const item = droppedItems[i];
-    const ageMs = timeMs - (item.userData.spawnMs as number);
+    const ageMs = timeMs - item.userData.spawnMs;
     const bob = Math.sin(ageMs * 0.005) * 0.08;
     item.rotation.y += deltaSeconds * 1.2;
-    item.position.y = (item.userData.baseY as number) + bob;
+    item.position.y = item.userData.baseY + bob;
+
+    const terrainX = sceneToTerrainX(item.position.x);
+    const terrainZ = sceneToTerrainZ(item.position.z);
+    const dx = terrainX - playerTerrainPos.x;
+    const dz = terrainZ - playerTerrainPos.z;
+    const dy = item.position.y - playerTerrainPos.y;
+    const distSq = dx * dx + dz * dz + dy * dy;
+
+    if (distSq <= PICKUP_RADIUS * PICKUP_RADIUS) {
+      addToInventory(item.userData.block, 1);
+      droppedItems.splice(i, 1);
+      releaseDroppedItem(item);
+      continue;
+    }
 
     if (ageMs > 5 * 60 * 1000) {
-      scene.remove(item);
-      item.geometry.dispose();
-      (item.material as THREE.Material).dispose();
       droppedItems.splice(i, 1);
+      releaseDroppedItem(item);
     }
   }
 
