@@ -77,6 +77,15 @@ const stoneTiles: FaceTileMap = {
   west: 3
 };
 
+const bedrockTiles: FaceTileMap = {
+  top: 3,
+  bottom: 3,
+  north: 3,
+  south: 3,
+  east: 3,
+  west: 3
+};
+
 const sandTiles: FaceTileMap = {
   top: 4,
   bottom: 4,
@@ -181,6 +190,7 @@ const blockTilesById: Record<BlockId, FaceTileMap> = {
   [BlockId.Grass]: grassTiles,
   [BlockId.Dirt]: dirtTiles,
   [BlockId.Stone]: stoneTiles,
+  [BlockId.Bedrock]: bedrockTiles,
   [BlockId.Sand]: sandTiles,
   [BlockId.Water]: waterTiles,
   [BlockId.WoodLog]: woodLogTiles,
@@ -622,6 +632,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       }, SEA_LEVEL, MAX_TERRAIN_Y);
       chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
       chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
+      chunk.fillSeaLevelWater(SEA_LEVEL);
       chunk.addTrees({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 13371 });
 
       for (let localX = 0; localX < CHUNK_SIZE; localX++) {

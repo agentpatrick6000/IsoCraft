@@ -22,7 +22,8 @@ export enum BlockId {
   WoodenShovel = 16,
   Furnace = 17,
   StonePickaxe = 18,
-  Torch = 19
+  Torch = 19,
+  Bedrock = 20
 }
 
 type MaskCell = {
@@ -76,11 +77,17 @@ export class Chunk {
       for (let z = 0; z < this.depth; z++) {
         const rawSurface = sampleSurfaceY(x, z);
         const surfaceY = THREE.MathUtils.clamp(Math.floor(rawSurface), 0, Math.min(this.height - 1, maxTerrainY));
-        const dirtStart = Math.max(1, surfaceY - 2);
 
-        for (let y = 0; y <= surfaceY; y++) {
+        const dirtStart = Math.max(1, surfaceY - 5);
+        const sandBandMin = seaLevel - 2;
+        const sandBandMax = seaLevel + 2;
+
+        // Bedrock floor.
+        this.set(x, 0, z, BlockId.Bedrock);
+
+        for (let y = 1; y <= surfaceY; y++) {
           if (y === surfaceY) {
-            const topBlock = surfaceY <= seaLevel ? BlockId.Sand : BlockId.Grass;
+            const topBlock = surfaceY >= sandBandMin && surfaceY <= sandBandMax ? BlockId.Sand : BlockId.Grass;
             this.set(x, y, z, topBlock);
           } else if (y >= dirtStart) {
             this.set(x, y, z, BlockId.Dirt);
@@ -89,6 +96,7 @@ export class Chunk {
           }
         }
 
+        // Initial sea fill; cave carving can remove this later and step-6 water pass can refine rendering.
         const waterMaxY = Math.min(seaLevel, this.height - 1);
         for (let y = surfaceY + 1; y <= waterMaxY; y++) {
           this.set(x, y, z, BlockId.Water);
@@ -189,8 +197,8 @@ export class Chunk {
     }> = [
       {
         block: BlockId.GoldOre,
-        minY: 0,
-        maxY: 15,
+        minY: 5,
+        maxY: 30,
         clusterMin: 2,
         clusterMax: 4,
         frequency: 0.18,
@@ -199,8 +207,8 @@ export class Chunk {
       },
       {
         block: BlockId.IronOre,
-        minY: 0,
-        maxY: 30,
+        minY: 5,
+        maxY: 60,
         clusterMin: 3,
         clusterMax: 5,
         frequency: 0.16,
@@ -209,8 +217,8 @@ export class Chunk {
       },
       {
         block: BlockId.CoalOre,
-        minY: 0,
-        maxY: 40,
+        minY: 5,
+        maxY: 80,
         clusterMin: 4,
         clusterMax: 8,
         frequency: 0.14,
@@ -260,6 +268,37 @@ export class Chunk {
     }
   }
 
+
+  fillSeaLevelWater(seaLevel: number): void {
+    const waterMaxY = Math.min(seaLevel, this.height - 1);
+    if (waterMaxY <= 0) {
+      return;
+    }
+
+    for (let x = 0; x < this.width; x++) {
+      for (let z = 0; z < this.depth; z++) {
+        for (let y = 1; y <= waterMaxY; y++) {
+          if (this.get(x, y, z) !== BlockId.Air) {
+            continue;
+          }
+
+          const hasSolidNeighbor =
+            this.isSolidForWater(this.get(x + 1, y, z)) ||
+            this.isSolidForWater(this.get(x - 1, y, z)) ||
+            this.isSolidForWater(this.get(x, y + 1, z)) ||
+            this.isSolidForWater(this.get(x, y - 1, z)) ||
+            this.isSolidForWater(this.get(x, y, z + 1)) ||
+            this.isSolidForWater(this.get(x, y, z - 1));
+
+          if (!hasSolidNeighbor) {
+            continue;
+          }
+
+          this.set(x, y, z, BlockId.Water);
+        }
+      }
+    }
+  }
 
   addCaves(options: { worldChunkX: number; worldChunkZ: number; chunkSize: number; seed?: number }): void {
     const { worldChunkX, worldChunkZ, chunkSize, seed = 31841 } = options;
@@ -361,6 +400,10 @@ export class Chunk {
         }
       }
     }
+  }
+
+  private isSolidForWater(block: BlockId): boolean {
+    return block !== BlockId.Air && block !== BlockId.Water && block !== BlockId.Leaves;
   }
 
   private carveOreVein(
