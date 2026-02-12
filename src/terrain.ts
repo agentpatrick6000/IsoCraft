@@ -536,33 +536,42 @@ export function buildChunkGreedyGeometry(options: {
           x[u] = i;
           x[v] = j;
 
-          const du = [0, 0, 0];
-          const dv = [0, 0, 0];
-          du[u] = w;
-          dv[v] = h;
-
-          const p0 = [x[0], x[1], x[2]];
-          const p1 = [x[0] + du[0], x[1] + du[1], x[2] + du[2]];
-          const p2 = [x[0] + dv[0], x[1] + dv[1], x[2] + dv[2]];
-          const p3 = [x[0] + du[0] + dv[0], x[1] + du[1] + dv[1], x[2] + du[2] + dv[2]];
-
           const normal = [0, 0, 0];
           normal[d] = cell.backFace ? -1 : 1;
 
-          const baseIndex = positions.length / 3;
+          // Keep faces unit-tiled (1x1 quads) to guarantee no texture stretching.
+          for (let hh = 0; hh < h; hh++) {
+            for (let ww = 0; ww < w; ww++) {
+              const sx = [x[0], x[1], x[2]];
+              sx[u] += ww;
+              sx[v] += hh;
 
-          if (cell.backFace) {
-            positions.push(...p0, ...p2, ...p1, ...p3);
-          } else {
-            positions.push(...p0, ...p1, ...p2, ...p3);
+              const du = [0, 0, 0];
+              const dv = [0, 0, 0];
+              du[u] = 1;
+              dv[v] = 1;
+
+              const p0 = [sx[0], sx[1], sx[2]];
+              const p1 = [sx[0] + du[0], sx[1] + du[1], sx[2] + du[2]];
+              const p2 = [sx[0] + dv[0], sx[1] + dv[1], sx[2] + dv[2]];
+              const p3 = [sx[0] + du[0] + dv[0], sx[1] + du[1] + dv[1], sx[2] + du[2] + dv[2]];
+
+              const baseIndex = positions.length / 3;
+
+              if (cell.backFace) {
+                positions.push(...p0, ...p2, ...p1, ...p3);
+              } else {
+                positions.push(...p0, ...p1, ...p2, ...p3);
+              }
+
+              for (let c = 0; c < 4; c++) {
+                normals.push(normal[0], normal[1], normal[2]);
+              }
+
+              pushUv(uvs, cell.tile, atlasColumns, atlasRows);
+              indices.push(baseIndex, baseIndex + 2, baseIndex + 1, baseIndex + 2, baseIndex + 3, baseIndex + 1);
+            }
           }
-
-          for (let c = 0; c < 4; c++) {
-            normals.push(normal[0], normal[1], normal[2]);
-          }
-
-          pushUv(uvs, cell.tile, atlasColumns, atlasRows);
-          indices.push(baseIndex, baseIndex + 2, baseIndex + 1, baseIndex + 2, baseIndex + 3, baseIndex + 1);
 
           for (let l = 0; l < h; l++) {
             for (let k = 0; k < w; k++) {
