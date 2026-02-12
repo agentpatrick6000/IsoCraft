@@ -108,20 +108,13 @@ export class Chunk {
   addTrees(options: { worldChunkX: number; worldChunkZ: number; chunkSize: number; seed?: number }): void {
     const { worldChunkX, worldChunkZ, chunkSize, seed = 9571 } = options;
 
-    for (let localX = 2; localX < this.width - 2; localX++) {
-      for (let localZ = 2; localZ < this.depth - 2; localZ++) {
+    for (let localX = 1; localX < this.width - 1; localX++) {
+      for (let localZ = 1; localZ < this.depth - 1; localZ++) {
         const worldX = worldChunkX * chunkSize + localX;
         const worldZ = worldChunkZ * chunkSize + localZ;
 
-        const treeNoise = fbm2d(worldX * 0.09, worldZ * 0.09, {
-          seed,
-          octaves: 3,
-          lacunarity: 2,
-          gain: 0.5
-        });
-        const placementJitter = hash2d(worldX, worldZ, seed + 101);
-
-        if (treeNoise < 0.64 || placementJitter < 0.72) {
+        // Roughly 1 tree per 40 surface cells, deterministic per world seed + position.
+        if (hash2d(worldX, worldZ, seed + 101) >= 1 / 40) {
           continue;
         }
 
@@ -130,19 +123,43 @@ export class Chunk {
           continue;
         }
 
-        const trunkHeight = 3 + Math.floor(hash2d(worldX, worldZ, seed + 202) * 3);
-        if (groundY + trunkHeight + 2 >= this.height) {
+        const trunkHeight = 4 + Math.floor(hash2d(worldX, worldZ, seed + 202) * 3); // 4-6
+        const canopyBaseY = groundY + trunkHeight;
+        const canopyTopY = canopyBaseY + 1;
+
+        if (canopyTopY >= this.height) {
           continue;
         }
 
-        let trunkBlocked = false;
-        for (let y = 1; y <= trunkHeight + 1; y++) {
-          if (this.get(localX, groundY + y, localZ) !== BlockId.Air) {
-            trunkBlocked = true;
+        let blocked = false;
+        for (let y = groundY + 1; y <= canopyTopY; y++) {
+          if (this.get(localX, y, localZ) !== BlockId.Air) {
+            blocked = true;
             break;
           }
         }
-        if (trunkBlocked) {
+        if (blocked) {
+          continue;
+        }
+
+        for (let ox = -1; ox <= 1 && !blocked; ox++) {
+          for (let oz = -1; oz <= 1 && !blocked; oz++) {
+            for (let y = canopyBaseY; y <= canopyTopY; y++) {
+              const x = localX + ox;
+              const z = localZ + oz;
+              if (x < 0 || x >= this.width || z < 0 || z >= this.depth) {
+                blocked = true;
+                break;
+              }
+              const existing = this.get(x, y, z);
+              if (existing !== BlockId.Air) {
+                blocked = true;
+                break;
+              }
+            }
+          }
+        }
+        if (blocked) {
           continue;
         }
 
@@ -150,31 +167,17 @@ export class Chunk {
           this.set(localX, groundY + y, localZ, BlockId.WoodLog);
         }
 
-        const canopyCenterY = groundY + trunkHeight;
-        for (let ox = -2; ox <= 2; ox++) {
-          for (let oz = -2; oz <= 2; oz++) {
-            for (let oy = -2; oy <= 2; oy++) {
-              const distance = Math.abs(ox) + Math.abs(oz) + Math.abs(oy) * 0.85;
-              if (distance > 3.55) {
-                continue;
-              }
-
+        for (let ox = -1; ox <= 1; ox++) {
+          for (let oz = -1; oz <= 1; oz++) {
+            for (let y = canopyBaseY; y <= canopyTopY; y++) {
               const x = localX + ox;
-              const y = canopyCenterY + oy;
               const z = localZ + oz;
-              if (x < 0 || x >= this.width || y < 0 || y >= this.height || z < 0 || z >= this.depth) {
+              if (x < 0 || x >= this.width || z < 0 || z >= this.depth) {
                 continue;
               }
-
-              if (this.get(x, y, z) !== BlockId.Air) {
-                continue;
+              if (this.get(x, y, z) === BlockId.Air) {
+                this.set(x, y, z, BlockId.Leaves);
               }
-
-              if (hash2d(worldX + ox, worldZ + oz, seed + y) < 0.12 && !(ox === 0 && oy >= 0 && oz === 0)) {
-                continue;
-              }
-
-              this.set(x, y, z, BlockId.Leaves);
             }
           }
         }
