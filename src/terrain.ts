@@ -36,7 +36,7 @@ export class Chunk {
   readonly depth: number;
   private readonly blocks: Uint8Array;
 
-  constructor(width = 16, height = 8, depth = 16) {
+  constructor(width = 16, height = 256, depth = 16) {
     this.width = width;
     this.height = height;
     this.depth = depth;
@@ -65,13 +65,17 @@ export class Chunk {
     this.fillFromHeightSampler(() => surfaceY, Math.max(0, surfaceY - 1));
   }
 
-  fillFromHeightSampler(sampleSurfaceY: (x: number, z: number) => number, seaLevel: number): void {
+  fillFromHeightSampler(
+    sampleSurfaceY: (x: number, z: number) => number,
+    seaLevel: number,
+    maxTerrainY: number = this.height - 1
+  ): void {
     this.blocks.fill(BlockId.Air);
 
     for (let x = 0; x < this.width; x++) {
       for (let z = 0; z < this.depth; z++) {
         const rawSurface = sampleSurfaceY(x, z);
-        const surfaceY = THREE.MathUtils.clamp(Math.floor(rawSurface), 0, this.height - 1);
+        const surfaceY = THREE.MathUtils.clamp(Math.floor(rawSurface), 0, Math.min(this.height - 1, maxTerrainY));
         const dirtStart = Math.max(1, surfaceY - 2);
 
         for (let y = 0; y <= surfaceY; y++) {
