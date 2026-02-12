@@ -37,6 +37,204 @@ app.appendChild(stats.dom);
 const FRAME_BUDGET_MS = 1000 / 60;
 let frameBudgetWarnCooldownMs = 0;
 
+const captureHudRoot = document.createElement('div');
+captureHudRoot.style.position = 'fixed';
+captureHudRoot.style.top = '14px';
+captureHudRoot.style.right = '14px';
+captureHudRoot.style.display = 'flex';
+captureHudRoot.style.flexDirection = 'column';
+captureHudRoot.style.alignItems = 'flex-end';
+captureHudRoot.style.gap = '8px';
+captureHudRoot.style.pointerEvents = 'none';
+captureHudRoot.style.zIndex = '35';
+app.appendChild(captureHudRoot);
+
+const recordingIndicator = document.createElement('div');
+recordingIndicator.style.display = 'none';
+recordingIndicator.style.alignItems = 'center';
+recordingIndicator.style.gap = '8px';
+recordingIndicator.style.padding = '6px 10px';
+recordingIndicator.style.borderRadius = '999px';
+recordingIndicator.style.background = 'rgba(20,20,20,0.72)';
+recordingIndicator.style.border = '1px solid rgba(255,255,255,0.26)';
+recordingIndicator.style.color = '#fff';
+recordingIndicator.style.fontFamily = 'system-ui, sans-serif';
+recordingIndicator.style.fontSize = '12px';
+recordingIndicator.style.fontWeight = '700';
+
+const recordingDot = document.createElement('span');
+recordingDot.style.width = '10px';
+recordingDot.style.height = '10px';
+recordingDot.style.borderRadius = '50%';
+recordingDot.style.background = '#ef4444';
+recordingDot.style.boxShadow = '0 0 0 0 rgba(239,68,68,0.8)';
+recordingDot.style.animation = 'recording-pulse 1s infinite ease-in-out';
+
+const recordingText = document.createElement('span');
+recordingText.textContent = 'REC';
+recordingIndicator.append(recordingDot, recordingText);
+captureHudRoot.appendChild(recordingIndicator);
+
+const captureToast = document.createElement('div');
+captureToast.style.display = 'none';
+captureToast.style.maxWidth = '48ch';
+captureToast.style.padding = '7px 11px';
+captureToast.style.borderRadius = '10px';
+captureToast.style.background = 'rgba(12,14,19,0.86)';
+captureToast.style.border = '1px solid rgba(255,255,255,0.22)';
+captureToast.style.color = '#fff';
+captureToast.style.fontFamily = 'system-ui, sans-serif';
+captureToast.style.fontSize = '12px';
+captureToast.style.boxShadow = '0 6px 20px rgba(0,0,0,0.3)';
+captureHudRoot.appendChild(captureToast);
+
+const captureHudStyle = document.createElement('style');
+captureHudStyle.textContent = `
+@keyframes recording-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(239,68,68,0.8); }
+  70% { box-shadow: 0 0 0 7px rgba(239,68,68,0); }
+  100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+}
+`;
+document.head.appendChild(captureHudStyle);
+
+let captureToastHideTimer: number | null = null;
+
+function showCaptureToast(message: string): void {
+  captureToast.textContent = message;
+  captureToast.style.display = 'block';
+  if (captureToastHideTimer !== null) {
+    window.clearTimeout(captureToastHideTimer);
+  }
+  captureToastHideTimer = window.setTimeout(() => {
+    captureToast.style.display = 'none';
+    captureToastHideTimer = null;
+  }, 2200);
+}
+
+type CaptureWindow = Window & {
+  __lastRecording?: string;
+  __lastScreenshot?: string;
+};
+
+const captureWindow = window as CaptureWindow;
+let activeRecorder: MediaRecorder | null = null;
+let recordingChunks: BlobPart[] = [];
+let recordingStopTimer: number | null = null;
+const RECORDING_MAX_MS = 60_000;
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const blobUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = blobUrl;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+}
+
+function downloadDataUrl(dataUrl: string, filename: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = dataUrl;
+  anchor.download = filename;
+  anchor.click();
+}
+
+function setRecordingHudVisible(visible: boolean): void {
+  recordingIndicator.style.display = visible ? 'flex' : 'none';
+}
+
+function recordingMimeType(): string {
+  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  for (const candidate of candidates) {
+    if (MediaRecorder.isTypeSupported(candidate)) {
+      return candidate;
+    }
+  }
+  return 'video/webm';
+}
+
+function stopRecording(reason: 'manual' | 'auto' = 'manual'): void {
+  if (!activeRecorder) {
+    return;
+  }
+
+  if (recordingStopTimer !== null) {
+    window.clearTimeout(recordingStopTimer);
+    recordingStopTimer = null;
+  }
+
+  const recorder = activeRecorder;
+  activeRecorder = null;
+  setRecordingHudVisible(false);
+
+  const wasRecording = recorder.state !== 'inactive';
+  if (wasRecording) {
+    recorder.stop();
+  }
+
+  showCaptureToast(reason === 'auto' ? 'Recording auto-stopped at 60s.' : 'Recording saved.');
+}
+
+function startRecording(): void {
+  if (activeRecorder) {
+    stopRecording('manual');
+    return;
+  }
+
+  const stream = renderer.domElement.captureStream(30);
+  const mimeType = recordingMimeType();
+  const recorder = new MediaRecorder(stream, { mimeType });
+  recordingChunks = [];
+
+  recorder.addEventListener('dataavailable', (event) => {
+    if (event.data && event.data.size > 0) {
+      recordingChunks.push(event.data);
+    }
+  });
+
+  recorder.addEventListener('stop', () => {
+    const blob = new Blob(recordingChunks, { type: mimeType });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `isocraft-recording-${timestamp}.webm`;
+    downloadBlob(blob, filename);
+
+    if (captureWindow.__lastRecording) {
+      URL.revokeObjectURL(captureWindow.__lastRecording);
+    }
+    captureWindow.__lastRecording = URL.createObjectURL(blob);
+
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+  });
+
+  activeRecorder = recorder;
+  recorder.start(250);
+  setRecordingHudVisible(true);
+  showCaptureToast('Recording started (R to stop).');
+
+  recordingStopTimer = window.setTimeout(() => {
+    stopRecording('auto');
+  }, RECORDING_MAX_MS);
+}
+
+function toggleRecording(): void {
+  if (activeRecorder) {
+    stopRecording('manual');
+  } else {
+    startRecording();
+  }
+}
+
+function captureScreenshot(): void {
+  const dataUrl = renderer.domElement.toDataURL('image/png');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `isocraft-screenshot-${timestamp}.png`;
+  downloadDataUrl(dataUrl, filename);
+  captureWindow.__lastScreenshot = dataUrl;
+  showCaptureToast('Screenshot captured.');
+}
+
 const camera = new THREE.OrthographicCamera();
 const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
 const BASE_CAMERA_DISTANCE = 96;
@@ -2528,6 +2726,14 @@ window.addEventListener('keydown', (event) => {
       rotateSnap(-1);
     } else if (key === 'e') {
       rotateSnap(1);
+    } else if (key === 'r') {
+      toggleRecording();
+      event.preventDefault();
+      return;
+    } else if (key === 'p') {
+      captureScreenshot();
+      event.preventDefault();
+      return;
     }
   }
 
@@ -2973,4 +3179,10 @@ requestAnimationFrame(animate);
 window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   updateCameraProjection();
+});
+
+window.addEventListener('beforeunload', () => {
+  if (activeRecorder) {
+    stopRecording('manual');
+  }
 });
