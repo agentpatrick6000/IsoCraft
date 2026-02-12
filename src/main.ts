@@ -204,9 +204,59 @@ const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 256;
 const MAX_TERRAIN_Y = 128;
 const SEA_LEVEL = 64;
-const BASE_HEIGHT = 86;
-const HEIGHT_AMPLITUDE = 24;
-const HEIGHT_NOISE_SCALE = 0.012;
+
+const WORLD_SEED = 4242;
+const TERRAIN_MIN_Y = 70;
+const TERRAIN_MAX_Y = 130;
+const PLAINS_CENTER = 75;
+const HILLS_CENTER = 92;
+const MOUNTAINS_CENTER = 116;
+const BIOME_SCALE = 0.0028;
+const DETAIL_SCALE = 0.011;
+const RIDGE_SCALE = 0.018;
+
+function sampleSurfaceHeight(worldX: number, worldZ: number): number {
+  const biomeBlend = fbm2d(worldX * BIOME_SCALE, worldZ * BIOME_SCALE, {
+    seed: WORLD_SEED + 11,
+    octaves: 4,
+    lacunarity: 2,
+    gain: 0.5
+  });
+
+  const detail = fbm2d(worldX * DETAIL_SCALE, worldZ * DETAIL_SCALE, {
+    seed: WORLD_SEED + 29,
+    octaves: 5,
+    lacunarity: 2,
+    gain: 0.5
+  });
+
+  const ridge = Math.abs(
+    fbm2d(worldX * RIDGE_SCALE, worldZ * RIDGE_SCALE, {
+      seed: WORLD_SEED + 57,
+      octaves: 3,
+      lacunarity: 2,
+      gain: 0.55
+    }) - 0.5
+  ) * 2;
+
+  let baseHeight: number;
+  if (biomeBlend < 0.4) {
+    const t = biomeBlend / 0.4;
+    baseHeight = THREE.MathUtils.lerp(TERRAIN_MIN_Y, PLAINS_CENTER, t);
+  } else if (biomeBlend < 0.74) {
+    const t = (biomeBlend - 0.4) / 0.34;
+    baseHeight = THREE.MathUtils.lerp(PLAINS_CENTER, HILLS_CENTER, t);
+  } else {
+    const t = (biomeBlend - 0.74) / 0.26;
+    baseHeight = THREE.MathUtils.lerp(HILLS_CENTER, MOUNTAINS_CENTER, t);
+  }
+
+  const detailOffset = (detail - 0.5) * 16;
+  const ridgeBoost = Math.max(0, ridge - 0.38) * 22;
+  const height = Math.round(baseHeight + detailOffset + ridgeBoost);
+
+  return THREE.MathUtils.clamp(height, TERRAIN_MIN_Y, TERRAIN_MAX_Y);
+}
 
 const playerSpawnTerrainPosition = new THREE.Vector3(0, 6, 0);
 const terrainTopByCell = new Map<string, number>();
@@ -568,14 +618,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       chunk.fillFromHeightSampler((localX, localZ) => {
         const worldX = chunkX * CHUNK_SIZE + localX;
         const worldZ = chunkZ * CHUNK_SIZE + localZ;
-        const noiseValue = fbm2d(worldX * HEIGHT_NOISE_SCALE, worldZ * HEIGHT_NOISE_SCALE, {
-          seed: 4242,
-          octaves: 5,
-          lacunarity: 2,
-          gain: 0.5
-        });
-
-        return BASE_HEIGHT + Math.round((noiseValue - 0.5) * HEIGHT_AMPLITUDE * 2);
+        return sampleSurfaceHeight(worldX, worldZ);
       }, SEA_LEVEL, MAX_TERRAIN_Y);
       chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
       chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
