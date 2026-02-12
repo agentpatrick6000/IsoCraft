@@ -411,14 +411,14 @@ const WORLD_CHUNK_RADIUS = 2;
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 256;
 const MAX_TERRAIN_Y = 128;
-const SEA_LEVEL = 62;
+const SEA_LEVEL = 64;
 
 const WORLD_SEED = 4242;
-const TERRAIN_MIN_Y = 60;
-const TERRAIN_MAX_Y = 96;
-const PLAINS_CENTER = 68;
-const HILLS_CENTER = 76;
-const MOUNTAINS_CENTER = 86;
+const TERRAIN_MIN_Y = 40;
+const TERRAIN_MAX_Y = 200;
+const PLAINS_CENTER = 72;
+const HILLS_CENTER = 90;
+const MOUNTAINS_CENTER = 140;
 const BIOME_SCALE = 0.0028;
 const DETAIL_SCALE = 0.011;
 const RIDGE_SCALE = 0.018;
@@ -459,8 +459,8 @@ function sampleSurfaceHeight(worldX: number, worldZ: number): number {
     baseHeight = THREE.MathUtils.lerp(HILLS_CENTER, MOUNTAINS_CENTER, t);
   }
 
-  const detailOffset = (detail - 0.5) * 6;
-  const ridgeBoost = Math.max(0, ridge - 0.38) * 10;
+  const detailOffset = (detail - 0.5) * 14;
+  const ridgeBoost = Math.max(0, ridge - 0.38) * 40;
   const height = Math.round(baseHeight + detailOffset + ridgeBoost);
 
   return THREE.MathUtils.clamp(height, TERRAIN_MIN_Y, TERRAIN_MAX_Y);
