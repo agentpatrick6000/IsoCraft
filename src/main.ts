@@ -237,8 +237,8 @@ function captureScreenshot(): void {
 
 const camera = new THREE.OrthographicCamera();
 const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
-const BASE_CAMERA_DISTANCE = 96;
-const ZOOM_LEVELS: number[] = [22, 32, 44];
+const BASE_CAMERA_DISTANCE = 160;
+const ZOOM_LEVELS: number[] = [32, 48, 72, 96];
 let zoomLevel = 1;
 let currentFrustumSize: number = ZOOM_LEVELS[zoomLevel];
 let desiredFrustumSize: number = currentFrustumSize;
@@ -411,14 +411,14 @@ const WORLD_CHUNK_RADIUS = 2;
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 256;
 const MAX_TERRAIN_Y = 128;
-const SEA_LEVEL = 64;
+const SEA_LEVEL = 72;
 
 const WORLD_SEED = 4242;
-const TERRAIN_MIN_Y = 70;
-const TERRAIN_MAX_Y = 130;
-const PLAINS_CENTER = 75;
-const HILLS_CENTER = 92;
-const MOUNTAINS_CENTER = 116;
+const TERRAIN_MIN_Y = 60;
+const TERRAIN_MAX_Y = 96;
+const PLAINS_CENTER = 68;
+const HILLS_CENTER = 76;
+const MOUNTAINS_CENTER = 86;
 const BIOME_SCALE = 0.0028;
 const DETAIL_SCALE = 0.011;
 const RIDGE_SCALE = 0.018;
@@ -459,8 +459,8 @@ function sampleSurfaceHeight(worldX: number, worldZ: number): number {
     baseHeight = THREE.MathUtils.lerp(HILLS_CENTER, MOUNTAINS_CENTER, t);
   }
 
-  const detailOffset = (detail - 0.5) * 16;
-  const ridgeBoost = Math.max(0, ridge - 0.38) * 22;
+  const detailOffset = (detail - 0.5) * 6;
+  const ridgeBoost = Math.max(0, ridge - 0.38) * 10;
   const height = Math.round(baseHeight + detailOffset + ridgeBoost);
 
   return THREE.MathUtils.clamp(height, TERRAIN_MIN_Y, TERRAIN_MAX_Y);
@@ -945,8 +945,8 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   worldAtlasTexture = atlasTexture;
   atlasTexture.generateMipmaps = false;
   updateHeldItemVisual();
-  atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
-  atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
+  atlasTexture.wrapS = THREE.RepeatWrapping;
+  atlasTexture.wrapT = THREE.RepeatWrapping;
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
 
   terrainMaterial = new THREE.MeshStandardMaterial({ map: atlasTexture });

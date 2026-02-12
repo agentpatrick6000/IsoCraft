@@ -487,14 +487,21 @@ function faceFromAxis(axis: number, backFace: boolean): BlockFace {
   return backFace ? 'north' : 'south';
 }
 
-function pushUv(uvs: number[], tile: number, atlasCols: number, atlasRows: number): void {
+function pushUv(
+  uvs: number[],
+  tile: number,
+  atlasCols: number,
+  atlasRows: number,
+  width = 1,
+  height = 1
+): void {
   const tileX = tile % atlasCols;
   const tileY = Math.floor(tile / atlasCols);
 
   const u0 = tileX / atlasCols;
   const v0 = 1 - tileY / atlasRows;
-  const u1 = (tileX + 1) / atlasCols;
-  const v1 = 1 - (tileY + 1) / atlasRows;
+  const u1 = (tileX + width) / atlasCols;
+  const v1 = 1 - (tileY + height) / atlasRows;
 
   uvs.push(u1, v0, u0, v0, u1, v1, u0, v1);
 }
@@ -577,11 +584,29 @@ export function buildChunkGreedyGeometry(options: {
             continue;
           }
 
-          // Keep atlas UV density correct (1 tile per 1x1 face).
-          // Greedy-merging larger quads with atlas UVs stretches textures,
-          // so we intentionally keep each emitted quad to 1x1.
-          const w = 1;
-          const h = 1;
+          let w = 1;
+          while (i + w < dims[u]) {
+            const nextCell = mask[n + w];
+            if (!nextCell || nextCell.tile !== cell.tile || nextCell.backFace !== cell.backFace) {
+              break;
+            }
+            w++;
+          }
+
+          let h = 1;
+          let canGrow = true;
+          while (j + h < dims[v] && canGrow) {
+            for (let k = 0; k < w; k++) {
+              const nextCell = mask[n + k + h * dims[u]];
+              if (!nextCell || nextCell.tile !== cell.tile || nextCell.backFace !== cell.backFace) {
+                canGrow = false;
+                break;
+              }
+            }
+            if (canGrow) {
+              h++;
+            }
+          }
 
           x[u] = i;
           x[v] = j;
@@ -589,39 +614,30 @@ export function buildChunkGreedyGeometry(options: {
           const normal = [0, 0, 0];
           normal[d] = cell.backFace ? -1 : 1;
 
-          // Keep faces unit-tiled (1x1 quads) to guarantee no texture stretching.
-          for (let hh = 0; hh < h; hh++) {
-            for (let ww = 0; ww < w; ww++) {
-              const sx = [x[0], x[1], x[2]];
-              sx[u] += ww;
-              sx[v] += hh;
+          const du = [0, 0, 0];
+          const dv = [0, 0, 0];
+          du[u] = w;
+          dv[v] = h;
 
-              const du = [0, 0, 0];
-              const dv = [0, 0, 0];
-              du[u] = 1;
-              dv[v] = 1;
+          const p0 = [x[0], x[1], x[2]];
+          const p1 = [x[0] + du[0], x[1] + du[1], x[2] + du[2]];
+          const p2 = [x[0] + dv[0], x[1] + dv[1], x[2] + dv[2]];
+          const p3 = [x[0] + du[0] + dv[0], x[1] + du[1] + dv[1], x[2] + du[2] + dv[2]];
 
-              const p0 = [sx[0], sx[1], sx[2]];
-              const p1 = [sx[0] + du[0], sx[1] + du[1], sx[2] + du[2]];
-              const p2 = [sx[0] + dv[0], sx[1] + dv[1], sx[2] + dv[2]];
-              const p3 = [sx[0] + du[0] + dv[0], sx[1] + du[1] + dv[1], sx[2] + du[2] + dv[2]];
+          const baseIndex = positions.length / 3;
 
-              const baseIndex = positions.length / 3;
-
-              if (cell.backFace) {
-                positions.push(...p0, ...p2, ...p1, ...p3);
-              } else {
-                positions.push(...p0, ...p1, ...p2, ...p3);
-              }
-
-              for (let c = 0; c < 4; c++) {
-                normals.push(normal[0], normal[1], normal[2]);
-              }
-
-              pushUv(uvs, cell.tile, atlasColumns, atlasRows);
-              indices.push(baseIndex, baseIndex + 2, baseIndex + 1, baseIndex + 2, baseIndex + 3, baseIndex + 1);
-            }
+          if (cell.backFace) {
+            positions.push(...p0, ...p2, ...p1, ...p3);
+          } else {
+            positions.push(...p0, ...p1, ...p2, ...p3);
           }
+
+          for (let c = 0; c < 4; c++) {
+            normals.push(normal[0], normal[1], normal[2]);
+          }
+
+          pushUv(uvs, cell.tile, atlasColumns, atlasRows, w, h);
+          indices.push(baseIndex, baseIndex + 2, baseIndex + 1, baseIndex + 2, baseIndex + 3, baseIndex + 1);
 
           for (let l = 0; l < h; l++) {
             for (let k = 0; k < w; k++) {
