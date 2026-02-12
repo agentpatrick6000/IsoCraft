@@ -78,7 +78,7 @@ export class Chunk {
         const rawSurface = sampleSurfaceY(x, z);
         const surfaceY = THREE.MathUtils.clamp(Math.floor(rawSurface), 0, Math.min(this.height - 1, maxTerrainY));
 
-        const dirtStart = Math.max(1, surfaceY - 5);
+        const dirtStart = Math.max(1, surfaceY - 8);  // 8 blocks of dirt minimum
         const sandBandMin = seaLevel - 2;
         const sandBandMax = seaLevel + 2;
 
@@ -124,15 +124,16 @@ export class Chunk {
         }
 
         const trunkHeight = 4 + Math.floor(hash2d(worldX, worldZ, seed + 202) * 3); // 4-6
-        const canopyBaseY = groundY + trunkHeight;
-        const canopyTopY = canopyBaseY + 1;
+        const canopyBaseY = groundY + trunkHeight - 1; // Canopy starts 1 below trunk top
+        const canopyTopY = canopyBaseY + 3; // 4 layers of canopy
 
         if (canopyTopY >= this.height) {
           continue;
         }
 
+        // Check trunk clearance
         let blocked = false;
-        for (let y = groundY + 1; y <= canopyTopY; y++) {
+        for (let y = groundY + 1; y <= groundY + trunkHeight; y++) {
           if (this.get(localX, y, localZ) !== BlockId.Air) {
             blocked = true;
             break;
@@ -142,39 +143,29 @@ export class Chunk {
           continue;
         }
 
-        for (let ox = -1; ox <= 1 && !blocked; ox++) {
-          for (let oz = -1; oz <= 1 && !blocked; oz++) {
-            for (let y = canopyBaseY; y <= canopyTopY; y++) {
-              const x = localX + ox;
-              const z = localZ + oz;
-              if (x < 0 || x >= this.width || z < 0 || z >= this.depth) {
-                blocked = true;
-                break;
-              }
-              const existing = this.get(x, y, z);
-              if (existing !== BlockId.Air) {
-                blocked = true;
-                break;
-              }
-            }
-          }
-        }
-        if (blocked) {
+        // Need 2-block margin from chunk edge for canopy
+        if (localX < 2 || localX >= this.width - 2 || localZ < 2 || localZ >= this.depth - 2) {
           continue;
         }
 
+        // Place trunk
         for (let y = 1; y <= trunkHeight; y++) {
           this.set(localX, groundY + y, localZ, BlockId.WoodLog);
         }
 
-        for (let ox = -1; ox <= 1; ox++) {
-          for (let oz = -1; oz <= 1; oz++) {
-            for (let y = canopyBaseY; y <= canopyTopY; y++) {
-              const x = localX + ox;
-              const z = localZ + oz;
-              if (x < 0 || x >= this.width || z < 0 || z >= this.depth) {
+        // Minecraft-style canopy: 5×5 lower layers, 3×3 top layers
+        for (let y = canopyBaseY; y <= canopyTopY; y++) {
+          const layer = y - canopyBaseY;
+          const radius = layer < 2 ? 2 : 1; // Bottom 2 layers = 5×5, top 2 = 3×3
+          for (let ox = -radius; ox <= radius; ox++) {
+            for (let oz = -radius; oz <= radius; oz++) {
+              // Skip corners on 5×5 layers for rounder shape
+              if (radius === 2 && Math.abs(ox) === 2 && Math.abs(oz) === 2) {
                 continue;
               }
+              const x = localX + ox;
+              const z = localZ + oz;
+              if (x < 0 || x >= this.width || z < 0 || z >= this.depth) continue;
               if (this.get(x, y, z) === BlockId.Air) {
                 this.set(x, y, z, BlockId.Leaves);
               }
@@ -338,7 +329,7 @@ export class Chunk {
           }
 
           const depthFromSurface = surfaceY - y;
-          if (depthFromSurface < 1) {
+          if (depthFromSurface < 10) {  // Preserve 10 blocks — NO caves near surface
             continue;
           }
 
@@ -382,9 +373,9 @@ export class Chunk {
           });
 
           const caveValue = caveBody * 0.72 + caveDetail * 0.28;
-          const deepThreshold = 0.645;
-          const nearSurfaceThreshold = 0.735;
-          const threshold = depthFromSurface >= 3 ? deepThreshold : nearSurfaceThreshold;
+          const deepThreshold = 0.70;
+          const nearSurfaceThreshold = 0.78;
+          const threshold = depthFromSurface >= 8 ? deepThreshold : nearSurfaceThreshold;
 
           if (caveValue < threshold) {
             continue;

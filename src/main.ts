@@ -19,6 +19,7 @@ if ('serviceWorker' in navigator) {
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87b8de);
+scene.fog = new THREE.Fog(0x87b8de, 250, 500);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -237,8 +238,8 @@ function captureScreenshot(): void {
 
 const camera = new THREE.OrthographicCamera();
 const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
-const BASE_CAMERA_DISTANCE = 160;
-const ZOOM_LEVELS: number[] = [32, 48, 72, 96];
+const BASE_CAMERA_DISTANCE = 200;
+const ZOOM_LEVELS: number[] = [48, 72, 96, 128];
 let zoomLevel = 1;
 let currentFrustumSize: number = ZOOM_LEVELS[zoomLevel];
 let desiredFrustumSize: number = currentFrustumSize;
@@ -248,31 +249,37 @@ let worldAtlasTexture: THREE.Texture | null = null;
 const worldRoot = new THREE.Group();
 scene.add(worldRoot);
 
+// Atlas layout (4×4 grid, tile index = row*4 + col):
+// Row 0: 0=stone_gray, 1=dirt_checkered, 2=grass_side(green+brown), 3=dark_gray
+// Row 1: 4=wood_brown, 5=sand_tan, 6=dark_olive, 7=water_dark
+// Row 2: 8=brown, 9=gold_sand, 10=green_medium, 11=blue
+// Row 3: 12=light_brown, 13=olive_yellow, 14=bright_green, 15=bright_blue
+
 const grassTiles: FaceTileMap = {
-  top: 0,
-  bottom: 2,
+  top: 14,      // bright green for grass top
+  bottom: 1,    // dirt
+  north: 2,     // grass side — green top strip + dirt body (classic Minecraft)
+  south: 2,
+  east: 2,
+  west: 2
+};
+
+const dirtTiles: FaceTileMap = {
+  top: 1,
+  bottom: 1,
   north: 1,
   south: 1,
   east: 1,
   west: 1
 };
 
-const dirtTiles: FaceTileMap = {
-  top: 2,
-  bottom: 2,
-  north: 2,
-  south: 2,
-  east: 2,
-  west: 2
-};
-
 const stoneTiles: FaceTileMap = {
-  top: 3,
-  bottom: 3,
-  north: 3,
-  south: 3,
-  east: 3,
-  west: 3
+  top: 0,
+  bottom: 0,
+  north: 0,
+  south: 0,
+  east: 0,
+  west: 0
 };
 
 const bedrockTiles: FaceTileMap = {
@@ -285,16 +292,7 @@ const bedrockTiles: FaceTileMap = {
 };
 
 const sandTiles: FaceTileMap = {
-  top: 4,
-  bottom: 4,
-  north: 4,
-  south: 4,
-  east: 4,
-  west: 4
-};
-
-const waterTiles: FaceTileMap = {
-  top: 5,
+  top: 5,       // tan sand
   bottom: 5,
   north: 5,
   south: 5,
@@ -302,22 +300,31 @@ const waterTiles: FaceTileMap = {
   west: 5
 };
 
+const waterTiles: FaceTileMap = {
+  top: 15,      // bright blue
+  bottom: 15,
+  north: 11,    // slightly darker blue for sides
+  south: 11,
+  east: 11,
+  west: 11
+};
+
 const woodLogTiles: FaceTileMap = {
-  top: 6,
-  bottom: 6,
-  north: 7,
-  south: 7,
-  east: 7,
-  west: 7
+  top: 9,       // gold/light cross-section
+  bottom: 9,
+  north: 4,     // brown bark
+  south: 4,
+  east: 4,
+  west: 4
 };
 
 const leavesTiles: FaceTileMap = {
-  top: 8,
-  bottom: 8,
-  north: 8,
-  south: 8,
-  east: 8,
-  west: 8
+  top: 10,      // medium green
+  bottom: 10,
+  north: 6,     // darker olive green for sides
+  south: 6,
+  east: 6,
+  west: 6
 };
 
 const coalOreTiles: FaceTileMap = {
@@ -407,63 +414,54 @@ const blockTilesById: Record<BlockId, FaceTileMap> = {
   [BlockId.Torch]: toolTiles
 };
 
-const WORLD_CHUNK_RADIUS = 2;
+const WORLD_CHUNK_RADIUS = 4;
 const CHUNK_SIZE = 16;
-const CHUNK_HEIGHT = 256;
-const MAX_TERRAIN_Y = 128;
-const SEA_LEVEL = 64;
+const CHUNK_HEIGHT = 128;
+const MAX_TERRAIN_Y = 100;
+const SEA_LEVEL = 62;
 
 const WORLD_SEED = 4242;
-const TERRAIN_MIN_Y = 40;
-const TERRAIN_MAX_Y = 200;
-const PLAINS_CENTER = 72;
-const HILLS_CENTER = 90;
-const MOUNTAINS_CENTER = 140;
-const BIOME_SCALE = 0.0028;
-const DETAIL_SCALE = 0.011;
-const RIDGE_SCALE = 0.018;
+
+// Infdev 611-style terrain: gentle rolling hills, sea level 62, surface 58-78ish.
+// No biome system. Single climate. Simple fBm heightmap.
 
 function sampleSurfaceHeight(worldX: number, worldZ: number): number {
-  const biomeBlend = fbm2d(worldX * BIOME_SCALE, worldZ * BIOME_SCALE, {
+  // Continental base — very low frequency, determines ocean vs land
+  const continental = fbm2d(worldX * 0.002, worldZ * 0.002, {
     seed: WORLD_SEED + 11,
+    octaves: 3,
+    lacunarity: 2,
+    gain: 0.5
+  });
+
+  // Detail noise — medium frequency rolling hills
+  const detail = fbm2d(worldX * 0.01, worldZ * 0.01, {
+    seed: WORLD_SEED + 29,
     octaves: 4,
     lacunarity: 2,
     gain: 0.5
   });
 
-  const detail = fbm2d(worldX * DETAIL_SCALE, worldZ * DETAIL_SCALE, {
-    seed: WORLD_SEED + 29,
-    octaves: 5,
+  // Micro detail — small bumps
+  const micro = fbm2d(worldX * 0.04, worldZ * 0.04, {
+    seed: WORLD_SEED + 57,
+    octaves: 2,
     lacunarity: 2,
     gain: 0.5
   });
 
-  const ridge = Math.abs(
-    fbm2d(worldX * RIDGE_SCALE, worldZ * RIDGE_SCALE, {
-      seed: WORLD_SEED + 57,
-      octaves: 3,
-      lacunarity: 2,
-      gain: 0.55
-    }) - 0.5
-  ) * 2;
+  // Base: center around sea level + 4 (so most land is above water)
+  // Continental pushes land up or down gently  
+  const base = SEA_LEVEL + 4 + (continental - 0.5) * 8;
 
-  let baseHeight: number;
-  if (biomeBlend < 0.4) {
-    const t = biomeBlend / 0.4;
-    baseHeight = THREE.MathUtils.lerp(TERRAIN_MIN_Y, PLAINS_CENTER, t);
-  } else if (biomeBlend < 0.74) {
-    const t = (biomeBlend - 0.4) / 0.34;
-    baseHeight = THREE.MathUtils.lerp(PLAINS_CENTER, HILLS_CENTER, t);
-  } else {
-    const t = (biomeBlend - 0.74) / 0.26;
-    baseHeight = THREE.MathUtils.lerp(HILLS_CENTER, MOUNTAINS_CENTER, t);
-  }
+  // Rolling hills: ±3 blocks — Infdev was VERY gentle
+  const hills = (detail - 0.5) * 6;
 
-  const detailOffset = (detail - 0.5) * 14;
-  const ridgeBoost = Math.max(0, ridge - 0.38) * 40;
-  const height = Math.round(baseHeight + detailOffset + ridgeBoost);
+  // Micro bumps: ±0.5 blocks
+  const bumps = (micro - 0.5) * 1;
 
-  return THREE.MathUtils.clamp(height, TERRAIN_MIN_Y, TERRAIN_MAX_Y);
+  const height = Math.round(base + hills + bumps);
+  return THREE.MathUtils.clamp(height, 1, MAX_TERRAIN_Y);
 }
 
 const playerSpawnTerrainPosition = new THREE.Vector3(0, 6, 0);
@@ -1005,7 +1003,7 @@ function updateCameraProjection(): void {
   camera.top = currentFrustumSize / 2;
   camera.bottom = -currentFrustumSize / 2;
   camera.near = 0.1;
-  camera.far = 512;
+  camera.far = 800;
   camera.updateProjectionMatrix();
 }
 
