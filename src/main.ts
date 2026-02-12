@@ -411,7 +411,7 @@ const WORLD_CHUNK_RADIUS = 2;
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 256;
 const MAX_TERRAIN_Y = 128;
-const SEA_LEVEL = 72;
+const SEA_LEVEL = 62;
 
 const WORLD_SEED = 4242;
 const TERRAIN_MIN_Y = 60;
@@ -945,8 +945,8 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   worldAtlasTexture = atlasTexture;
   atlasTexture.generateMipmaps = false;
   updateHeldItemVisual();
-  atlasTexture.wrapS = THREE.RepeatWrapping;
-  atlasTexture.wrapT = THREE.RepeatWrapping;
+  atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
+  atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
 
   terrainMaterial = new THREE.MeshStandardMaterial({ map: atlasTexture });
@@ -960,7 +960,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   waterMaterial = new THREE.MeshStandardMaterial({
     color: 0x3b82f6,
     transparent: true,
-    opacity: 0.58,
+    opacity: 0.88,
     roughness: 0.18,
     metalness: 0,
     depthWrite: false

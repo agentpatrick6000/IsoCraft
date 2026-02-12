@@ -584,29 +584,11 @@ export function buildChunkGreedyGeometry(options: {
             continue;
           }
 
-          let w = 1;
-          while (i + w < dims[u]) {
-            const nextCell = mask[n + w];
-            if (!nextCell || nextCell.tile !== cell.tile || nextCell.backFace !== cell.backFace) {
-              break;
-            }
-            w++;
-          }
-
-          let h = 1;
-          let canGrow = true;
-          while (j + h < dims[v] && canGrow) {
-            for (let k = 0; k < w; k++) {
-              const nextCell = mask[n + k + h * dims[u]];
-              if (!nextCell || nextCell.tile !== cell.tile || nextCell.backFace !== cell.backFace) {
-                canGrow = false;
-                break;
-              }
-            }
-            if (canGrow) {
-              h++;
-            }
-          }
+          // Greedy merging disabled — texture atlas + RepeatWrapping can't tile
+          // individual tiles. Need texture array (WebGL2) for proper greedy merging.
+          // TODO: Implement texture array support, then re-enable merging.
+          const w = 1;
+          const h = 1;
 
           x[u] = i;
           x[v] = j;
