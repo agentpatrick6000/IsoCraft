@@ -277,10 +277,12 @@ type WorldChunk = {
   chunk: Chunk;
   terrainMesh: THREE.Mesh;
   leavesMesh: THREE.Mesh;
+  waterMesh: THREE.Mesh;
 };
 
 const terrainMeshes: THREE.Mesh[] = [];
 const leavesMeshes: THREE.Mesh[] = [];
+const waterMeshes: THREE.Mesh[] = [];
 const worldChunks: WorldChunk[] = [];
 const worldChunkByKey = new Map<string, WorldChunk>();
 
@@ -620,6 +622,14 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
     alphaTest: 0.05,
     depthWrite: false
   });
+  const waterMaterial = new THREE.MeshStandardMaterial({
+    color: 0x3b82f6,
+    transparent: true,
+    opacity: 0.58,
+    roughness: 0.18,
+    metalness: 0,
+    depthWrite: false
+  });
 
   for (let chunkX = -WORLD_CHUNK_RADIUS; chunkX <= WORLD_CHUNK_RADIUS; chunkX++) {
     for (let chunkZ = -WORLD_CHUNK_RADIUS; chunkZ <= WORLD_CHUNK_RADIUS; chunkZ++) {
@@ -646,8 +656,8 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       const terrainGeometry = buildChunkGreedyGeometry({
         chunk,
         blockTiles: blockTilesById,
-        shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves,
-        isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves
+        shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water,
+        isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water
       });
 
       const leavesGeometry = buildChunkGreedyGeometry({
@@ -655,6 +665,13 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
         blockTiles: blockTilesById,
         shouldRender: (block) => block === BlockId.Leaves,
         isOpaque: (block) => block === BlockId.Leaves
+      });
+
+      const waterGeometry = buildChunkGreedyGeometry({
+        chunk,
+        blockTiles: blockTilesById,
+        shouldRender: (block) => block === BlockId.Water,
+        isOpaque: (block) => block === BlockId.Water
       });
 
       const chunkMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
@@ -668,7 +685,13 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
       worldRoot.add(leavesMesh);
       leavesMeshes.push(leavesMesh);
 
-      const record: WorldChunk = { chunkX, chunkZ, chunk, terrainMesh: chunkMesh, leavesMesh };
+      const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
+      waterMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
+      waterMesh.renderOrder = 2;
+      worldRoot.add(waterMesh);
+      waterMeshes.push(waterMesh);
+
+      const record: WorldChunk = { chunkX, chunkZ, chunk, terrainMesh: chunkMesh, leavesMesh, waterMesh };
       worldChunks.push(record);
       worldChunkByKey.set(worldChunkKey(chunkX, chunkZ), record);
 
@@ -2106,8 +2129,8 @@ function rebuildChunkMeshes(record: WorldChunk, blockTiles: Record<BlockId, Face
   const terrainGeometry = buildChunkGreedyGeometry({
     chunk: record.chunk,
     blockTiles,
-    shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves,
-    isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves
+    shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water,
+    isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water
   });
   record.terrainMesh.geometry.dispose();
   record.terrainMesh.geometry = terrainGeometry;
@@ -2120,6 +2143,15 @@ function rebuildChunkMeshes(record: WorldChunk, blockTiles: Record<BlockId, Face
   });
   record.leavesMesh.geometry.dispose();
   record.leavesMesh.geometry = leavesGeometry;
+
+  const waterGeometry = buildChunkGreedyGeometry({
+    chunk: record.chunk,
+    blockTiles,
+    shouldRender: (block) => block === BlockId.Water,
+    isOpaque: (block) => block === BlockId.Water
+  });
+  record.waterMesh.geometry.dispose();
+  record.waterMesh.geometry = waterGeometry;
 }
 
 function beginBreakAnimation(target: MiningTarget): void {
