@@ -258,19 +258,19 @@ scene.add(worldRoot);
 const grassTiles: FaceTileMap = {
   top: 14,      // bright green for grass top
   bottom: 1,    // dirt
-  north: 2,     // grass side — green top strip + dirt body (classic Minecraft)
-  south: 2,
-  east: 2,
-  west: 2
+  north: 10,    // medium green for sides — iso view shows sides most
+  south: 10,
+  east: 10,
+  west: 10
 };
 
 const dirtTiles: FaceTileMap = {
-  top: 1,
+  top: 1,       // brown dirt
   bottom: 1,
-  north: 1,
-  south: 1,
-  east: 1,
-  west: 1
+  north: 2,     // grass_side (green strip + dirt) for visible dirt faces
+  south: 2,
+  east: 2,
+  west: 2
 };
 
 const stoneTiles: FaceTileMap = {
@@ -414,7 +414,7 @@ const blockTilesById: Record<BlockId, FaceTileMap> = {
   [BlockId.Torch]: toolTiles
 };
 
-const WORLD_CHUNK_RADIUS = 4;
+const WORLD_CHUNK_RADIUS = 5;
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 128;
 const MAX_TERRAIN_Y = 100;
@@ -422,45 +422,50 @@ const SEA_LEVEL = 62;
 
 const WORLD_SEED = 4242;
 
-// Infdev 611-style terrain: gentle rolling hills, sea level 62, surface 58-78ish.
-// No biome system. Single climate. Simple fBm heightmap.
+// Infdev 611-style terrain: gentle rolling hills, sea level 62.
+// No biome system. Single climate. Domain-warped fBm heightmap.
+
+const DOMAIN_WARP_SCALE = 0.0065;
+const DOMAIN_WARP_AMPLITUDE = 8;  // Gentle warp, not extreme
+
+function sampleWarpedWorld(worldX: number, worldZ: number): { warpedX: number; warpedZ: number } {
+  const warpX = (fbm2d(worldX * DOMAIN_WARP_SCALE, worldZ * DOMAIN_WARP_SCALE, {
+    seed: WORLD_SEED + 71, octaves: 3, lacunarity: 2, gain: 0.5
+  }) - 0.5) * DOMAIN_WARP_AMPLITUDE;
+  const warpZ = (fbm2d(worldX * DOMAIN_WARP_SCALE, worldZ * DOMAIN_WARP_SCALE, {
+    seed: WORLD_SEED + 89, octaves: 3, lacunarity: 2, gain: 0.5
+  }) - 0.5) * DOMAIN_WARP_AMPLITUDE;
+  return { warpedX: worldX + warpX, warpedZ: worldZ + warpZ };
+}
 
 function sampleSurfaceHeight(worldX: number, worldZ: number): number {
+  const { warpedX, warpedZ } = sampleWarpedWorld(worldX, worldZ);
+
   // Continental base — very low frequency, determines ocean vs land
-  const continental = fbm2d(worldX * 0.002, worldZ * 0.002, {
-    seed: WORLD_SEED + 11,
-    octaves: 3,
-    lacunarity: 2,
-    gain: 0.5
+  const continental = fbm2d(warpedX * 0.002, warpedZ * 0.002, {
+    seed: WORLD_SEED + 11, octaves: 3, lacunarity: 2, gain: 0.5
   });
 
   // Detail noise — medium frequency rolling hills
-  const detail = fbm2d(worldX * 0.01, worldZ * 0.01, {
-    seed: WORLD_SEED + 29,
-    octaves: 4,
-    lacunarity: 2,
-    gain: 0.5
+  const detail = fbm2d(warpedX * 0.01, warpedZ * 0.01, {
+    seed: WORLD_SEED + 29, octaves: 5, lacunarity: 2, gain: 0.5
   });
 
-  // Micro detail — small bumps
-  const micro = fbm2d(worldX * 0.04, worldZ * 0.04, {
-    seed: WORLD_SEED + 57,
-    octaves: 2,
-    lacunarity: 2,
-    gain: 0.5
-  });
+  // Ridge noise — adds occasional sharp ridges
+  const ridge = Math.abs(fbm2d(warpedX * 0.018, warpedZ * 0.018, {
+    seed: WORLD_SEED + 57, octaves: 3, lacunarity: 2, gain: 0.55
+  }) - 0.5) * 2;
 
-  // Base: center around sea level + 4 (so most land is above water)
-  // Continental pushes land up or down gently  
-  const base = SEA_LEVEL + 4 + (continental - 0.5) * 8;
+  // Base height — most land above sea level, Infdev-gentle
+  const base = SEA_LEVEL + 4 + (continental - 0.5) * 6;
 
-  // Rolling hills: ±3 blocks — Infdev was VERY gentle
+  // Rolling hills — gentle, max ±3 blocks  
   const hills = (detail - 0.5) * 6;
 
-  // Micro bumps: ±0.5 blocks
-  const bumps = (micro - 0.5) * 1;
+  // Ridge boost — subtle, occasional +2-3 blocks
+  const ridgeBoost = Math.max(0, ridge - 0.5) * 4;
 
-  const height = Math.round(base + hills + bumps);
+  const height = Math.round(base + hills + ridgeBoost);
   return THREE.MathUtils.clamp(height, 1, MAX_TERRAIN_Y);
 }
 
@@ -550,11 +555,9 @@ function generateChunkData(chunkX: number, chunkZ: number): Chunk {
     const worldZ = chunkZ * CHUNK_SIZE + localZ;
     return sampleSurfaceHeight(worldX, worldZ);
   }, SEA_LEVEL, MAX_TERRAIN_Y);
-  // Caves disabled — from isometric view, cave openings show ugly stone patches
-  // Re-enable once underground visibility (layer peeling) is implemented
+  // Caves disabled until surface looks right
   // chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
-  // Ore deposits disabled for now — they create ugly speckled stone at visible terrain edges
-  // chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
+  chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
   chunk.fillSeaLevelWater(SEA_LEVEL);
   chunk.addTrees({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 13371 });
   return chunk;
