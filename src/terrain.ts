@@ -527,25 +527,11 @@ export function buildChunkGreedyGeometry(options: {
             continue;
           }
 
-          let w = 1;
-          while (i + w < dims[u]) {
-            const next = mask[n + w];
-            if (!next || next.tile !== cell.tile || next.backFace !== cell.backFace) break;
-            w++;
-          }
-
-          let h = 1;
-          let done = false;
-          while (j + h < dims[v] && !done) {
-            for (let k = 0; k < w; k++) {
-              const next = mask[n + k + h * dims[u]];
-              if (!next || next.tile !== cell.tile || next.backFace !== cell.backFace) {
-                done = true;
-                break;
-              }
-            }
-            if (!done) h++;
-          }
+          // Keep atlas UV density correct (1 tile per 1x1 face).
+          // Greedy-merging larger quads with atlas UVs stretches textures,
+          // so we intentionally keep each emitted quad to 1x1.
+          const w = 1;
+          const h = 1;
 
           x[u] = i;
           x[v] = j;
