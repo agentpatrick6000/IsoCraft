@@ -39,8 +39,8 @@ let frameBudgetWarnCooldownMs = 0;
 
 const camera = new THREE.OrthographicCamera();
 const ISO_ELEVATION = Math.atan(Math.sin(Math.PI / 4));
-const BASE_CAMERA_DISTANCE = 24;
-const ZOOM_LEVELS: number[] = [14, 20, 28];
+const BASE_CAMERA_DISTANCE = 96;
+const ZOOM_LEVELS: number[] = [22, 32, 44];
 let zoomLevel = 1;
 let currentFrustumSize: number = ZOOM_LEVELS[zoomLevel];
 let desiredFrustumSize: number = currentFrustumSize;
@@ -732,7 +732,7 @@ function updateCameraProjection(): void {
   camera.top = currentFrustumSize / 2;
   camera.bottom = -currentFrustumSize / 2;
   camera.near = 0.1;
-  camera.far = 200;
+  camera.far = 512;
   camera.updateProjectionMatrix();
 }
 
@@ -2865,6 +2865,10 @@ function animate(timeMs: number): void {
   updateCameraProjection();
 
   cameraTarget.copy(player.position);
+  const surfaceY = getTerrainTopY(playerTerrainPos.x, playerTerrainPos.z);
+  if (surfaceY !== null) {
+    cameraTarget.y = Math.max(cameraTarget.y, surfaceY + 1.25);
+  }
   if (!followPlayer) {
     cameraTarget.add(followOffset);
   }
