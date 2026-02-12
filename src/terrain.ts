@@ -78,17 +78,21 @@ export class Chunk {
         const rawSurface = sampleSurfaceY(x, z);
         const surfaceY = THREE.MathUtils.clamp(Math.floor(rawSurface), 0, Math.min(this.height - 1, maxTerrainY));
 
-        const dirtStart = Math.max(1, surfaceY - 8);  // 8 blocks of dirt minimum
-        const sandBandMin = seaLevel - 2;
+        const dirtStart = Math.max(1, surfaceY - 20);  // 20 blocks of dirt — no stone visible from surface ever
+        const sandBandMin = seaLevel - 3;
         const sandBandMax = seaLevel + 2;
+        const isSandColumn = surfaceY >= sandBandMin && surfaceY <= sandBandMax;
 
         // Bedrock floor.
         this.set(x, 0, z, BlockId.Bedrock);
 
         for (let y = 1; y <= surfaceY; y++) {
           if (y === surfaceY) {
-            const topBlock = surfaceY >= sandBandMin && surfaceY <= sandBandMax ? BlockId.Sand : BlockId.Grass;
+            const topBlock = isSandColumn ? BlockId.Sand : BlockId.Grass;
             this.set(x, y, z, topBlock);
+          } else if (isSandColumn && y >= surfaceY - 4) {
+            // Sand columns: sand all the way down 4 blocks (beach depth)
+            this.set(x, y, z, BlockId.Sand);
           } else if (y >= dirtStart) {
             this.set(x, y, z, BlockId.Dirt);
           } else {

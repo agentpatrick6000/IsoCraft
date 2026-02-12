@@ -550,8 +550,11 @@ function generateChunkData(chunkX: number, chunkZ: number): Chunk {
     const worldZ = chunkZ * CHUNK_SIZE + localZ;
     return sampleSurfaceHeight(worldX, worldZ);
   }, SEA_LEVEL, MAX_TERRAIN_Y);
-  chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
-  chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
+  // Caves disabled — from isometric view, cave openings show ugly stone patches
+  // Re-enable once underground visibility (layer peeling) is implemented
+  // chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
+  // Ore deposits disabled for now — they create ugly speckled stone at visible terrain edges
+  // chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
   chunk.fillSeaLevelWater(SEA_LEVEL);
   chunk.addTrees({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 13371 });
   return chunk;
