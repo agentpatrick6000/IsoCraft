@@ -286,6 +286,13 @@ const waterMeshes: THREE.Mesh[] = [];
 const worldChunks: WorldChunk[] = [];
 const worldChunkByKey = new Map<string, WorldChunk>();
 
+let terrainMaterial: THREE.MeshStandardMaterial | null = null;
+let leavesMaterial: THREE.MeshStandardMaterial | null = null;
+let waterMaterial: THREE.MeshStandardMaterial | null = null;
+let activeChunkCenterX = 0;
+let activeChunkCenterZ = 0;
+let worldReady = false;
+
 const PATH_LINE_Y_OFFSET = 0.08;
 const MOVE_TARGET_EPSILON = 0.075;
 const MAX_PATH_SEARCH = 5000;
@@ -338,6 +345,136 @@ function splitChunkAndLocal(worldCoord: number): { chunk: number; local: number 
   const chunk = Math.floor(worldCoord / CHUNK_SIZE);
   const local = worldCoord - chunk * CHUNK_SIZE;
   return { chunk, local };
+}
+
+function generateChunkData(chunkX: number, chunkZ: number): Chunk {
+  const chunk = new Chunk(CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
+  chunk.fillFromHeightSampler((localX, localZ) => {
+    const worldX = chunkX * CHUNK_SIZE + localX;
+    const worldZ = chunkZ * CHUNK_SIZE + localZ;
+    return sampleSurfaceHeight(worldX, worldZ);
+  }, SEA_LEVEL, MAX_TERRAIN_Y);
+  chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
+  chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
+  chunk.fillSeaLevelWater(SEA_LEVEL);
+  chunk.addTrees({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 13371 });
+  return chunk;
+}
+
+function removeWorldChunk(chunkX: number, chunkZ: number): void {
+  const key = worldChunkKey(chunkX, chunkZ);
+  const record = worldChunkByKey.get(key);
+  if (!record) {
+    return;
+  }
+
+  worldRoot.remove(record.terrainMesh, record.leavesMesh, record.waterMesh);
+  record.terrainMesh.geometry.dispose();
+  record.leavesMesh.geometry.dispose();
+  record.waterMesh.geometry.dispose();
+
+  const terrainIndex = terrainMeshes.indexOf(record.terrainMesh);
+  if (terrainIndex >= 0) terrainMeshes.splice(terrainIndex, 1);
+  const leavesIndex = leavesMeshes.indexOf(record.leavesMesh);
+  if (leavesIndex >= 0) leavesMeshes.splice(leavesIndex, 1);
+  const waterIndex = waterMeshes.indexOf(record.waterMesh);
+  if (waterIndex >= 0) waterMeshes.splice(waterIndex, 1);
+
+  const chunkIndex = worldChunks.indexOf(record);
+  if (chunkIndex >= 0) worldChunks.splice(chunkIndex, 1);
+
+  for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+    for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
+      const worldX = chunkX * CHUNK_SIZE + localX;
+      const worldZ = chunkZ * CHUNK_SIZE + localZ;
+      terrainTopByCell.delete(cellKey(worldX, worldZ));
+    }
+  }
+
+  worldChunkByKey.delete(key);
+}
+
+function createWorldChunk(chunkX: number, chunkZ: number): void {
+  if (!terrainMaterial || !leavesMaterial || !waterMaterial) {
+    return;
+  }
+  if (worldChunkByKey.has(worldChunkKey(chunkX, chunkZ))) {
+    return;
+  }
+
+  const chunk = generateChunkData(chunkX, chunkZ);
+
+  for (let localX = 0; localX < CHUNK_SIZE; localX++) {
+    for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
+      const worldX = chunkX * CHUNK_SIZE + localX;
+      const worldZ = chunkZ * CHUNK_SIZE + localZ;
+      terrainTopByCell.set(cellKey(worldX, worldZ), chunk.getTopSolidY(localX, localZ));
+    }
+  }
+
+  const terrainGeometry = buildChunkGreedyGeometry({
+    chunk,
+    blockTiles: blockTilesById,
+    shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water,
+    isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water
+  });
+
+  const leavesGeometry = buildChunkGreedyGeometry({
+    chunk,
+    blockTiles: blockTilesById,
+    shouldRender: (block) => block === BlockId.Leaves,
+    isOpaque: (block) => block === BlockId.Leaves
+  });
+
+  const waterGeometry = buildChunkGreedyGeometry({
+    chunk,
+    blockTiles: blockTilesById,
+    shouldRender: (block) => block === BlockId.Water,
+    isOpaque: (block) => block === BlockId.Water
+  });
+
+  const chunkMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
+  chunkMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
+  worldRoot.add(chunkMesh);
+  terrainMeshes.push(chunkMesh);
+
+  const leavesMesh = new THREE.Mesh(leavesGeometry, leavesMaterial);
+  leavesMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
+  leavesMesh.renderOrder = 1;
+  worldRoot.add(leavesMesh);
+  leavesMeshes.push(leavesMesh);
+
+  const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
+  waterMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
+  waterMesh.renderOrder = 2;
+  worldRoot.add(waterMesh);
+  waterMeshes.push(waterMesh);
+
+  const record: WorldChunk = { chunkX, chunkZ, chunk, terrainMesh: chunkMesh, leavesMesh, waterMesh };
+  worldChunks.push(record);
+  worldChunkByKey.set(worldChunkKey(chunkX, chunkZ), record);
+}
+
+function ensureChunksAround(centerChunkX: number, centerChunkZ: number): void {
+  const keepKeys = new Set<string>();
+
+  for (let chunkX = centerChunkX - WORLD_CHUNK_RADIUS; chunkX <= centerChunkX + WORLD_CHUNK_RADIUS; chunkX++) {
+    for (let chunkZ = centerChunkZ - WORLD_CHUNK_RADIUS; chunkZ <= centerChunkZ + WORLD_CHUNK_RADIUS; chunkZ++) {
+      keepKeys.add(worldChunkKey(chunkX, chunkZ));
+      createWorldChunk(chunkX, chunkZ);
+    }
+  }
+
+  for (const key of Array.from(worldChunkByKey.keys())) {
+    if (keepKeys.has(key)) {
+      continue;
+    }
+    const [xText, zText] = key.split(',');
+    removeWorldChunk(Number.parseInt(xText, 10), Number.parseInt(zText, 10));
+  }
+
+  activeChunkCenterX = centerChunkX;
+  activeChunkCenterZ = centerChunkZ;
 }
 
 function updateTopYForColumn(chunkX: number, chunkZ: number, localX: number, localZ: number): void {
@@ -614,15 +751,15 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
   atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
 
-  const terrainMaterial = new THREE.MeshStandardMaterial({ map: atlasTexture });
-  const leavesMaterial = new THREE.MeshStandardMaterial({
+  terrainMaterial = new THREE.MeshStandardMaterial({ map: atlasTexture });
+  leavesMaterial = new THREE.MeshStandardMaterial({
     map: atlasTexture,
     transparent: true,
     opacity: 0.72,
     alphaTest: 0.05,
     depthWrite: false
   });
-  const waterMaterial = new THREE.MeshStandardMaterial({
+  waterMaterial = new THREE.MeshStandardMaterial({
     color: 0x3b82f6,
     transparent: true,
     opacity: 0.58,
@@ -631,80 +768,17 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
     depthWrite: false
   });
 
-  for (let chunkX = -WORLD_CHUNK_RADIUS; chunkX <= WORLD_CHUNK_RADIUS; chunkX++) {
-    for (let chunkZ = -WORLD_CHUNK_RADIUS; chunkZ <= WORLD_CHUNK_RADIUS; chunkZ++) {
-      const chunk = new Chunk(CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE);
+  ensureChunksAround(0, 0);
 
-      chunk.fillFromHeightSampler((localX, localZ) => {
-        const worldX = chunkX * CHUNK_SIZE + localX;
-        const worldZ = chunkZ * CHUNK_SIZE + localZ;
-        return sampleSurfaceHeight(worldX, worldZ);
-      }, SEA_LEVEL, MAX_TERRAIN_Y);
-      chunk.addCaves({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 31841 });
-      chunk.addOreDeposits({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 24013 });
-      chunk.fillSeaLevelWater(SEA_LEVEL);
-      chunk.addTrees({ worldChunkX: chunkX, worldChunkZ: chunkZ, chunkSize: CHUNK_SIZE, seed: 13371 });
-
-      for (let localX = 0; localX < CHUNK_SIZE; localX++) {
-        for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
-          const worldX = chunkX * CHUNK_SIZE + localX;
-          const worldZ = chunkZ * CHUNK_SIZE + localZ;
-          terrainTopByCell.set(cellKey(worldX, worldZ), chunk.getTopSolidY(localX, localZ));
-        }
-      }
-
-      const terrainGeometry = buildChunkGreedyGeometry({
-        chunk,
-        blockTiles: blockTilesById,
-        shouldRender: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water,
-        isOpaque: (block) => block !== BlockId.Air && block !== BlockId.Leaves && block !== BlockId.Water
-      });
-
-      const leavesGeometry = buildChunkGreedyGeometry({
-        chunk,
-        blockTiles: blockTilesById,
-        shouldRender: (block) => block === BlockId.Leaves,
-        isOpaque: (block) => block === BlockId.Leaves
-      });
-
-      const waterGeometry = buildChunkGreedyGeometry({
-        chunk,
-        blockTiles: blockTilesById,
-        shouldRender: (block) => block === BlockId.Water,
-        isOpaque: (block) => block === BlockId.Water
-      });
-
-      const chunkMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
-      chunkMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
-      worldRoot.add(chunkMesh);
-      terrainMeshes.push(chunkMesh);
-
-      const leavesMesh = new THREE.Mesh(leavesGeometry, leavesMaterial);
-      leavesMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
-      leavesMesh.renderOrder = 1;
-      worldRoot.add(leavesMesh);
-      leavesMeshes.push(leavesMesh);
-
-      const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
-      waterMesh.position.set(chunkX * CHUNK_SIZE, 0, chunkZ * CHUNK_SIZE);
-      waterMesh.renderOrder = 2;
-      worldRoot.add(waterMesh);
-      waterMeshes.push(waterMesh);
-
-      const record: WorldChunk = { chunkX, chunkZ, chunk, terrainMesh: chunkMesh, leavesMesh, waterMesh };
-      worldChunks.push(record);
-      worldChunkByKey.set(worldChunkKey(chunkX, chunkZ), record);
-
-      if (chunkX === 0 && chunkZ === 0) {
-        const centerX = Math.floor(CHUNK_SIZE / 2);
-        const centerZ = Math.floor(CHUNK_SIZE / 2);
-        playerSpawnTerrainPosition.set(
-          chunkX * CHUNK_SIZE + centerX + 0.5,
-          chunk.getTopSolidY(centerX, centerZ) + 1,
-          chunkZ * CHUNK_SIZE + centerZ + 0.5
-        );
-      }
-    }
+  const spawnChunk = worldChunkByKey.get(worldChunkKey(0, 0));
+  if (spawnChunk) {
+    const centerX = Math.floor(CHUNK_SIZE / 2);
+    const centerZ = Math.floor(CHUNK_SIZE / 2);
+    playerSpawnTerrainPosition.set(
+      centerX + 0.5,
+      spawnChunk.chunk.getTopSolidY(centerX, centerZ) + 1,
+      centerZ + 0.5
+    );
   }
 
   const worldWidth = (WORLD_CHUNK_RADIUS * 2 + 1) * CHUNK_SIZE;
@@ -714,6 +788,7 @@ textureLoader.load('/textures/atlas.png', (atlasTexture) => {
 
   playerTerrainPos.copy(playerSpawnTerrainPosition);
   syncPlayerScenePositionFromTerrain();
+  worldReady = true;
 });
 
 const followOffset = new THREE.Vector3();
@@ -2787,6 +2862,15 @@ function animate(timeMs: number): void {
   }
 
   applyPlayerMovement(deltaSeconds);
+
+  if (worldReady) {
+    const playerChunkX = Math.floor(playerTerrainPos.x / CHUNK_SIZE);
+    const playerChunkZ = Math.floor(playerTerrainPos.z / CHUNK_SIZE);
+    if (playerChunkX !== activeChunkCenterX || playerChunkZ !== activeChunkCenterZ) {
+      ensureChunksAround(playerChunkX, playerChunkZ);
+      rebuildPathVisual();
+    }
+  }
 
   if (activeMiningTarget) {
     const elapsedMs = timeMs - miningStartMs;
